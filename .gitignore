@@ -1,0 +1,26 @@
+# Environments
+venv/
+.env
+
+# Models & Big Files
+models/PhoWhisper-large-ct2/
+models/
+*.pt
+*.bin
+
+# Temp Audio Files
+temp_16k.wav
+voice-sample.mp3
+*.wav
+*.mp3
+
+# IDE / OS
+.cursor/
+.vscode/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Logs
+*.log
+debug-*.log
