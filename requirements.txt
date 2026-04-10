@@ -56,3 +56,6 @@ rnnoise>=0.2.0
 # logmmse: Log-MMSE speech enhancement (alternative cho RNNoise)
 # Dùng nếu rnnoise không cài được trên Windows
 logmmse>=1.3.0
+
+# python-multipart: Gói bắt buộc cho FastAPI để xử lý định dạng form-data file upload (dành cho API /api/transcribe-file)
+python-multipart>=0.0.9
