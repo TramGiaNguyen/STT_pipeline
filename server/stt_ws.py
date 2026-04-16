@@ -40,6 +40,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import time
 from typing import Dict, Optional
 
@@ -261,9 +262,17 @@ class STTWebSocketHandler:
         cls._vad = SileroVAD(threshold=VAD_THRESHOLD)
         logger.info("Silero VAD loaded")
 
-        # Load STT Engine - mặc định dùng PhoWhisper (tốt hơn cho tiếng Việt)
+        # Ưu tiên load PhoWhisper-large-ct2 nếu tồn tại, nếu không mới dùng EraX
         if model_path is None:
-            model_path = "models/PhoWhisper-large-ct2"
+            phowhisper_path = "models/PhoWhisper-large-ct2"
+            erax_path = "models/EraX-WoW-Turbo-V1.1-CT2"
+            
+            if os.path.exists(phowhisper_path):
+                model_path = phowhisper_path
+                logger.info("Phát hiện PhoWhisper-large-ct2, sẽ sử dụng làm mô hình mặc định")
+            else:
+                model_path = erax_path
+                logger.info("Không tìm thấy PhoWhisper, sử dụng EraX làm mặc định")
         
         cls._stt_engine = STTEngine(model_path=model_path, device=device)
         logger.info(f"STT Engine loaded, device: {cls._stt_engine.device}, model: {model_path}")
@@ -325,26 +334,32 @@ class STTWebSocketHandler:
     async def _send_status(self, status: str, message: str = ""):
         """Gửi trạng thái về cho client"""
         try:
-            await self.websocket.send_json({
-                "type": "status",
-                "status": str(status),
-                "message": str(message),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            })
+            # Kiểm tra trạng thái kết nối trước khi gửi
+            if self.websocket.client_state.value == 1: # 1 là CONNECTED
+                await self.websocket.send_json({
+                    "type": "status",
+                    "status": str(status),
+                    "message": str(message),
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                })
         except Exception as e:
-            logger.error(f"Lỗi gửi status: {e}")
+            # Chỉ log nếu không phải lỗi do đóng kết nối
+            if "close message" not in str(e).lower():
+                logger.error(f"Lỗi gửi status: {e}")
 
     async def _send_result(self, text: str, confidence: float = 0.0):
         """Gửi kết quả nhận dạng về cho client"""
         try:
-            await self.websocket.send_json({
-                "type": "result",
-                "text": text.strip(),
-                "confidence": round(float(confidence), 4),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            })
+            if self.websocket.client_state.value == 1:
+                await self.websocket.send_json({
+                    "type": "result",
+                    "text": text.strip(),
+                    "confidence": round(float(confidence), 4),
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                })
         except Exception as e:
-            logger.error(f"Lỗi gửi kết quả: {e}")
+            if "close message" not in str(e).lower():
+                logger.error(f"Lỗi gửi kết quả: {e}")
 
     async def _send_error(self, message: str):
         """Gửi thông báo lỗi về cho client"""
@@ -404,7 +419,7 @@ class STTWebSocketHandler:
                 vad_filter=False,        # TẮT double VAD
                 temperature=0.0,         # Greedy decode - xác định nhất
                 beam_size=8,             # 8 là vừa đủ
-                condition_on_previous_text=True,  # QUAN TRỌNG: Giữ context giữa câu
+                condition_on_previous_text=False, # Tắt để chống hallucination loop (Test 3 cực kỳ hiệu quả)
                 word_timestamps=True,    # Cần để lấy confidence
                 # initial_prompt BỊ XÓA: prompt khiến Whisper "tiếp tục" khi gặp
                 # noise/silence sau lời nói thật → sinh hallucination dài
@@ -460,8 +475,27 @@ class STTWebSocketHandler:
                 
                 full_text = " ".join(seg["text"] for seg in filtered_segments)
                 
-                # Filter 4: Kiểm tra hallucination - text quá lặp lại
+                # Filter 4: Kiểm tra hallucination - text quá lặp lại hoặc chuỗi ký tự vô nghĩa
                 words = full_text.split()
+                
+                # Loại bỏ các từ có ký tự lặp lại quá nhiều (ví dụ: 'ừừừừừừ')
+                clean_words = []
+                for w in words:
+                    if len(w) > 5:
+                        # Kiểm tra xem từ có bị lặp lại 1 ký tự > 50% độ dài không
+                        char_counts = {}
+                        for char in w:
+                            char_counts[char] = char_counts.get(char, 0) + 1
+                        
+                        max_char_count = max(char_counts.values()) if char_counts else 0
+                        if max_char_count / len(w) > 0.6:
+                            logger.warning(f"Hallucination detection (long char repeat): '{w}'")
+                            continue
+                    clean_words.append(w)
+                
+                full_text = " ".join(clean_words)
+                words = full_text.split()
+
                 if len(words) > 5:  # Chỉ check nếu có > 5 từ
                     unique_words = len(set(words))
                     repetition_ratio = unique_words / len(words)
@@ -480,6 +514,11 @@ class STTWebSocketHandler:
                             logger.warning(f"Hallucination: cụm '{phrase}' lặp {count} lần, bỏ qua. Text: '{full_text}'")
                             await self._send_result("")
                             return
+                
+                if not full_text.strip():
+                    logger.info("Kết quả sau khi lọc là rỗng")
+                    await self._send_result("")
+                    return
                 
                 # Log để debug
                 logger.info(f"Transcription OK: '{full_text}' ({len(filtered_segments)} segments, {len(words)} words)")

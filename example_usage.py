@@ -70,6 +70,7 @@ def transcribe_single_file(
     initial_prompt: str = None,
     beam_size: int = 5,
     model_path: str = None,
+    condition_on_previous_text: bool = True,
 ):
     """
     Nhận dạng một file âm thanh và xuất kết quả
@@ -161,6 +162,7 @@ def transcribe_single_file(
         word_timestamps=show_word_timestamps,
         initial_prompt=initial_prompt,
         beam_size=beam_size,
+        condition_on_previous_text=condition_on_previous_text,
     )
 
     # Xuất kết quả
@@ -285,6 +287,12 @@ Mã ngôn ngữ được hỗ trợ:
         default=None,
         help="Đường dẫn mô hình (mặc định: models/EraX-WoW-Turbo-V1.1-CT2). "
              "Thử: models/PhoWhisper-large-ct2 cho tiếng Việt tốt hơn"
+    )
+    parser.add_argument(
+        "--no-condition-prev-text",
+        action="store_true",
+        help="Tắt condition_on_previous_text. Ngăn lỗi hallucination nhân lên "
+             "giữa các segment. Khuyến nghị dùng khi output bị lặp lại hoặc toàn ký tự lạ."
     )
     parser.add_argument(
         "--verbose", "-v",
@@ -426,6 +434,7 @@ Mã ngôn ngữ được hỗ trợ:
             initial_prompt=args.prompt,
             beam_size=args.beam_size,
             model_path=args.model,
+            condition_on_previous_text=not args.no_condition_prev_text,
         )
     else:
         # Không có tham số thì hiển thị help

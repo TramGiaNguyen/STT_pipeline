@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="vi">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -9,11 +10,14 @@
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
 
     <!-- Stylesheet -->
     <link rel="stylesheet" href="static/style.css">
 </head>
+
 <body>
     <div class="container">
 
@@ -41,50 +45,47 @@
                 <div class="mic-select-wrapper">
                     <label for="mic-select" class="mic-label">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
-                            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
+                            <path
+                                d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
                         </svg>
                         Micro
                     </label>
                     <select id="mic-select" class="mic-select" aria-label="Chọn micro">
                         <option value="">Đang tải...</option>
                     </select>
-                    <button id="btn-refresh-mic" class="btn-icon" title="Làm mới danh sách micro" aria-label="Làm mới danh sách micro">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                            <path d="M23 4v6h-6"/>
-                            <path d="M1 20v-6h6"/>
-                            <path d="M3.51 9a9 9 0 0114.85-3.36L23 10"/>
-                            <path d="M20.49 15a9 9 0 01-14.85 3.36L1 14"/>
+                    <button id="btn-refresh-mic" class="btn-icon" title="Làm mới danh sách micro"
+                        aria-label="Làm mới danh sách micro">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" aria-hidden="true">
+                            <path d="M23 4v6h-6" />
+                            <path d="M1 20v-6h6" />
+                            <path d="M3.51 9a9 9 0 0114.85-3.36L23 10" />
+                            <path d="M20.49 15a9 9 0 01-14.85 3.36L1 14" />
                         </svg>
                     </button>
                 </div>
 
                 <!-- Nút ghi âm chính -->
-                <button
-                    id="btn-record"
-                    class="btn btn-start"
-                    aria-label="Bắt đầu ghi âm"
-                    title="Bật micro và bắt đầu nhận dạng giọng nói"
-                >
+                <button id="btn-record" class="btn btn-start" aria-label="Bắt đầu ghi âm"
+                    title="Bật micro và bắt đầu nhận dạng giọng nói">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                        <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
-                        <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                        <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
+                        <path
+                            d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
                     </svg>
                     <span id="btn-record-text">Bắt đầu</span>
                 </button>
 
                 <!-- Nút xóa kết quả -->
-                <button
-                    id="btn-clear"
-                    class="btn btn-secondary"
-                    aria-label="Xóa kết quả"
-                    title="Xóa toàn bộ kết quả nhận dạng"
-                >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                        <polyline points="3 6 5 6 21 6"/>
-                        <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>
-                        <path d="M10 11v6M14 11v6"/>
-                        <path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/>
+                <button id="btn-clear" class="btn btn-secondary" aria-label="Xóa kết quả"
+                    title="Xóa toàn bộ kết quả nhận dạng">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        aria-hidden="true">
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
+                        <path d="M10 11v6M14 11v6" />
+                        <path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2" />
                     </svg>
                     Xóa
                 </button>
@@ -108,21 +109,79 @@
         <!-- ==================== File Upload Card ==================== -->
         <section class="card tab-content" id="tab-file" aria-label="Điều khiển Upload File">
             <div class="card-header">
-                <h2 class="card-title">Upload File Âm thanh</h2>
+                <h2 class="card-title">Upload File Âm thanh / Video</h2>
             </div>
+
+            <!-- Hàng chọn file + nút -->
             <div class="control-panel file-upload-panel">
                 <input type="file" id="file-input" class="file-input" accept="audio/*,video/*" />
                 <button id="btn-upload" class="btn btn-start" disabled>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                        <path d="M5 20h14v-2H5v2zm7-18L5.33 9h4.67v6h4V9h4.67L12 2z"/>
+                        <path d="M5 20h14v-2H5v2zm7-18L5.33 9h4.67v6h4V9h4.67L12 2z" />
                     </svg>
                     <span>Nhận dạng file</span>
                 </button>
+                <button id="btn-clear-transcript" class="btn btn-secondary" style="display:none;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        aria-hidden="true">
+                        <polyline points="3 6 5 6 21 6" />
+                        <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
+                    </svg>
+                    Xóa
+                </button>
             </div>
-            <div class="status-row" style="margin-top: 16px;">
-                <span id="file-status-text" class="status-text status-ready">Chọn file audio/video để tải lên (hỗ trợ .mp3, .wav, .mp4, etc.)</span>
-                <!-- Loading indicator -->
+
+            <!-- Trạng thái + spinner -->
+            <div class="status-row" style="margin-top:14px;">
+                <span id="file-status-text" class="status-text status-ready">Chọn file audio/video để tải lên (hỗ trợ
+                    .mp3, .wav, .mp4, .mkv...)</span>
                 <span id="upload-spinner" class="spinner" style="display:none;"></span>
+            </div>
+
+            <!-- Tùy chọn Diarization -->
+            <div style="margin-top: 10px; padding: 10px; background: rgba(51, 65, 85, 0.4); border-radius: 6px; border: 1px dashed rgba(148, 163, 184, 0.3);">
+                <label style="display: flex; align-items: center; cursor: pointer; color: #e2e8f0; font-size: 14px;">
+                    <input type="checkbox" id="diarize-checkbox" style="margin-right: 8px; cursor: pointer; width: 16px; height: 16px; accent-color: #3b82f6;">
+                    <strong>Phân tách người nói (Speaker Diarization)</strong>
+                    <span style="margin-left: 6px; color: #94a3b8; font-size: 13px;">- Nhận dạng ai đang nói (tốn nhiều phần cứng & thời gian hơn)</span>
+                </label>
+            </div>
+
+            <!-- Thanh tiến trình (ẩn khi chưa xử lý) -->
+            <div id="file-progress-container" style="display:none; margin-top:14px;">
+                <div class="progress-track">
+                    <div id="file-progress-fill" class="progress-fill" style="width:0%"></div>
+                </div>
+                <div id="file-progress-label" class="progress-label">0%</div>
+            </div>
+
+            <!-- Textarea hiển thị toàn bộ transcript -->
+            <textarea id="transcript-area" class="transcript-area" readonly
+                placeholder="Nội dung phiên âm sẽ xuất hiện tại đây theo từng đoạn khi mô hình xử lý xong...&#10;&#10;Hỗ trợ file từ 4 phút đến ~3 tiếng."
+                aria-label="Nội dung phiên âm"></textarea>
+
+            <!-- Nút download -->
+            <div class="file-action-row" style="margin-top:12px;">
+                <button id="btn-download-transcript" class="btn btn-download" disabled>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        aria-hidden="true">
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                        <polyline points="7 10 12 15 17 10" />
+                        <line x1="12" y1="15" x2="12" y2="3" />
+                    </svg>
+                    Tải về .txt
+                </button>
+                <button id="btn-download-srt" class="btn btn-download"
+                    style="background: linear-gradient(135deg, #ea580c, #c2410c);" disabled>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        aria-hidden="true">
+                        <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                        <polyline points="2 17 12 22 22 17"></polyline>
+                        <polyline points="2 12 12 17 22 12"></polyline>
+                    </svg>
+                    Tải về phụ đề .srt
+                </button>
+                <span id="transcript-stats" class="transcript-stats"></span>
             </div>
         </section>
 
@@ -162,6 +221,7 @@
     </footer>
 
     <!-- ==================== Scripts ==================== -->
-    <script src="static/app.js"></script>
+    <script src="static/app.js?v=2.1"></script>
 </body>
+
 </html>

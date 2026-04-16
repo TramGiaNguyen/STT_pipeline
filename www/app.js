@@ -926,79 +926,394 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
-    // =============== File Upload Logic ===============
-    const fileInput = document.getElementById("file-input");
-    const btnUpload = document.getElementById("btn-upload");
-    const spinner = document.getElementById("upload-spinner");
-    const fileStatusText = document.getElementById("file-status-text");
+    // =============== File Upload / Stream Logic ===============
+    const fileInput        = document.getElementById("file-input");
+    const btnUpload        = document.getElementById("btn-upload");
+    const btnClearTranscript = document.getElementById("btn-clear-transcript");
+    const btnDownload      = document.getElementById("btn-download-transcript");
+    const spinner          = document.getElementById("upload-spinner");
+    const fileStatusText   = document.getElementById("file-status-text");
+    const progressContainer = document.getElementById("file-progress-container");
+    const progressFill     = document.getElementById("file-progress-fill");
+    const progressLabel    = document.getElementById("file-progress-label");
+    const transcriptArea   = document.getElementById("transcript-area");
+    const transcriptStats  = document.getElementById("transcript-stats");
 
+    /** Định dạng giây → "mm:ss" hoặc "h:mm:ss" */
+    function formatDuration(sec) {
+        if (!sec || isNaN(sec)) return "?";
+        const h = Math.floor(sec / 3600);
+        const m = Math.floor((sec % 3600) / 60);
+        const s = Math.floor(sec % 60);
+        if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+        return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    }
+
+    /** Cập nhật thanh tiến trình */
+    function setProgress(pct, label) {
+        if (progressContainer) progressContainer.style.display = "block";
+        if (progressFill) progressFill.style.width = `${pct}%`;
+        if (progressLabel) progressLabel.textContent = label || `${pct}%`;
+    }
+
+    /** Bật/tắt UI trong lúc đang xử lý */
+    function setProcessingState(active, fileName) {
+        if (btnUpload)  btnUpload.disabled  = active;
+        if (fileInput)  fileInput.disabled  = active;
+        if (spinner)    spinner.style.display = active ? "inline-block" : "none";
+        if (active) {
+            fileStatusText.textContent = `Đang xử lý: ${fileName} — vui lòng chờ...`;
+            fileStatusText.className   = "status-text status-processing";
+        }
+    }
+
+    // Khi chọn file
     if (fileInput && btnUpload) {
         fileInput.addEventListener("change", () => {
             if (fileInput.files.length > 0) {
                 btnUpload.disabled = false;
-                fileStatusText.textContent = `Đã chọn: ${fileInput.files[0].name}`;
-                fileStatusText.className = "status-text status-listening";
+                fileStatusText.textContent = `Đã chọn: ${fileInput.files[0].name} (${(fileInput.files[0].size / 1024 / 1024).toFixed(1)} MB)`;
+                fileStatusText.className   = "status-text status-listening";
             } else {
                 btnUpload.disabled = true;
                 fileStatusText.textContent = "Chọn file audio/video để tải lên";
-                fileStatusText.className = "status-text status-ready";
+                fileStatusText.className   = "status-text status-ready";
             }
         });
 
+        // ===== Nút "Nhận dạng file" — dùng SSE streaming =====
         btnUpload.addEventListener("click", async () => {
-            if (fileInput.files.length === 0) return;
-            
+            if (!fileInput.files.length) return;
+
             const file = fileInput.files[0];
+            const params = new URLSearchParams(window.location.search);
+            const lang   = params.get("lang") || "vi";
+
             const formData = new FormData();
             formData.append("file", file);
-            
-            const params = new URLSearchParams(window.location.search);
-            const lang = params.get("lang") || "vi";
             formData.append("language", lang);
 
-            // Hiển thị trạng thái processing
-            btnUpload.disabled = true;
-            fileInput.disabled = true;
-            if (spinner) spinner.style.display = "inline-block";
-            fileStatusText.textContent = `Đang xử lý ${file.name}... (vui lòng chờ)`;
-            fileStatusText.className = "status-text status-processing";
-            log(`Bắt đầu tải và xử lý file: ${file.name}`, "info");
+            const diarizeCheckbox = document.getElementById("diarize-checkbox");
+            if (diarizeCheckbox && diarizeCheckbox.checked) {
+                formData.append("diarize", "true");
+            } else {
+                formData.append("diarize", "false");
+            }
+
+            // Reset UI
+            if (transcriptArea)   { transcriptArea.value = ""; }
+            if (btnDownload)      { btnDownload.disabled = true; }
+            const btnDownloadSrt = document.getElementById("btn-download-srt");
+            if (btnDownloadSrt)   { btnDownloadSrt.disabled = true; }
+            if (btnClearTranscript) btnClearTranscript.style.display = "none";
+            if (transcriptStats)  transcriptStats.textContent = "";
+            if (progressContainer) progressContainer.style.display = "none";
+
+            setProcessingState(true, file.name);
+            log(`Bắt đầu stream STT: ${file.name} (${lang})`, "info");
+
+            let totalDuration = 0;
+            let segmentCount  = 0;
+            let aborted = false;
+            let lastSpeakerText = null; // Theo dõi cờ đổi người nói
+            // Lưu lại thông tin tất cả segment để xuất file srt/vtt
+            window.currentSegments = []; 
+
+            /** Cấu trúc Data lại bằng "Nhịp Thở" (Timestamps) và Bẻ Dòng */
+            function smartFormatSegment(eventData) {
+                // Nếu model không trả về từng từ (words), dùng text chay từ model
+                if (!eventData.words || eventData.words.length === 0) {
+                    let s = eventData.text.trim();
+                    if (!s) return "";
+                    // Đảm bảo viết hoa chữ đầu và kết thúc bằng dấu chấm
+                    return s.charAt(0).toUpperCase() + s.slice(1) + (/[.!?]$/.test(s) ? "" : ".");
+                }
+
+                let finalSegment = "";
+                let wordCountByLine = 0;
+                
+                // Mảng các từ nối thường dùng ở giữa câu, không nên ngắt dòng trước nó
+                const conjunctions = ["mà", "nhưng", "nên", "vì", "tại", "thì", "còn", "vậy", "tuy", "rồi", "nếu", "để"];
+
+                for (let i = 0; i < eventData.words.length; i++) {
+                    let wObj = eventData.words[i];
+                    let wordStr = wObj.word; // Đã bao gồm dấu câu từ model (lstrip ở server)
+                    
+                    // 1. Xử lý Viết Hoa: Nếu là từ đầu tiên của segment hoặc sau dấu ngắt câu
+                    if (finalSegment.length === 0 || /[.!?]\s*$/.test(finalSegment) || finalSegment.endsWith("\n")) {
+                        // Bỏ khoảng trắng thừa ở đầu nếu có
+                        wordStr = wordStr.trimStart();
+                        wordStr = wordStr.charAt(0).toUpperCase() + wordStr.slice(1);
+                    }
+                    
+                    finalSegment += wordStr;
+                    wordCountByLine++;
+
+                    // 2. Kiểm tra dấu câu hiện có từ AI (Faster-Whisper thường gắn dấu vào word)
+                    const hasPunctuation = /[.!?,,]/.test(wordStr);
+
+                    // 3. Logic thêm dấu câu dựa trên "Nhịp thở" (Gaps) nếu AI chưa bỏ dấu
+                    if (i < eventData.words.length - 1) {
+                        let nextWObj = eventData.words[i + 1];
+                        let nextWord = nextWObj.word.trim().toLowerCase();
+                        let gap = nextWObj.start - wObj.end;
+                        
+                        // Nếu AI chưa có dấu câu tại đây
+                        if (!hasPunctuation) {
+                            // Nếu nghỉ rất dài (> 2.0s) => Ngắt đoạn (Paragraph)
+                            if (gap >= 2.0) {
+                                finalSegment += ".\n\n";
+                                wordCountByLine = 0;
+                            } 
+                            // Nếu nghỉ vừa (> 1.0s) => Kết thúc câu
+                            else if (gap >= 1.0) {
+                                // Nếu từ tiếp theo là liên từ => chỉ dùng dấu phẩy
+                                if (conjunctions.includes(nextWord)) {
+                                    finalSegment += ", ";
+                                } else {
+                                    finalSegment += ". ";
+                                }
+                                wordCountByLine = 0;
+                            } 
+                            // Nếu nghỉ ngắn (> 0.4s) => Dấu phẩy
+                            else if (gap >= 0.4) {
+                                finalSegment += ", ";
+                            } 
+                            // Nếu câu quá dài (> 15 từ) mà chưa nghỉ, và gặp từ nối => ngắt phẩy nhẹ
+                            else if (wordCountByLine >= 15 && conjunctions.includes(nextWord)) {
+                                finalSegment += ", ";
+                                wordCountByLine = 0;
+                            } 
+                            else {
+                                finalSegment += " ";
+                            }
+                        } else {
+                            // Nếu AI đã có dấu câu, chỉ cần thêm khoảng trắng hoặc xuống dòng nếu là dấu kết thúc
+                            if (/[.!?]/.test(wordStr)) {
+                                if (gap >= 2.5) {
+                                    finalSegment += "\n\n";
+                                } else {
+                                    finalSegment += " ";
+                                }
+                                wordCountByLine = 0;
+                            } else {
+                                // Dấu phẩy hoặc khác
+                                finalSegment += " ";
+                            }
+                        }
+                    } else {
+                        // Kết thúc segment: Đảm bảo có dấu kết thúc nếu AI quên
+                        if (!/[.!?]$/.test(finalSegment)) {
+                            finalSegment += ".";
+                        }
+                    }
+                }
+                return finalSegment;
+            }
 
             try {
-                const response = await fetch("/api/transcribe-file", {
+                const response = await fetch("/api/transcribe-stream", {
                     method: "POST",
-                    body: formData
+                    body:   formData,
                 });
 
                 if (!response.ok) {
-                    const text = await response.text();
-                    throw new Error(`Lỗi server (${response.status}): ${text}`);
+                    const errText = await response.text();
+                    throw new Error(`Server lỗi (${response.status}): ${errText}`);
                 }
 
-                const data = await response.json();
-                
-                log(`Hoàn tất File STT: ${file.name}`, "success");
-                fileStatusText.textContent = `Thành công!`;
-                fileStatusText.className = "status-text status-listening";
-                
-                // Hiển thị toàn bộ text vào 1 item mới trong log results
-                const timeStr = new Date().toLocaleTimeString("vi-VN");
-                if (data.text) {
-                    displayResult(`[File: ${file.name}]<br/>${data.text}`, null, new Date().toISOString());
-                } else {
-                    displayResult(`[File: ${file.name}] (Không nhận dạng được lời nói)`, null, new Date().toISOString());
+                setProgress(0, "Đang chuyển đổi định dạng âm thanh và lọc nhiễu nền...");
+
+                const reader  = response.body.getReader();
+                const decoder = new TextDecoder("utf-8");
+                let buffer    = "";
+
+                // Đọc SSE stream cho đến khi kết thúc
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+
+                    // Tách từng SSE event (phân cách bằng \n\n)
+                    const parts = buffer.split("\n\n");
+                    buffer = parts.pop(); // Giữ phần chưa đầy đủ
+
+                    for (const part of parts) {
+                        const line = part.trim();
+                        if (!line.startsWith("data:")) continue;
+
+                        let event;
+                        try {
+                            event = JSON.parse(line.slice(5).trim());
+                        } catch {
+                            continue;
+                        }
+
+                        if (event.type === "info") {
+                            // Server gửi thông tin file ngay khi convert xong
+                            totalDuration = event.total_duration || 0;
+                            const dur = formatDuration(totalDuration);
+                            setProgress(0, `Bắt đầu nhận dạng AI... / Tổng: ${dur}`);
+                            log(`File duration: ${dur}, ngôn ngữ: ${event.language}`, "info");
+
+                        } else if (event.type === "status") {
+                            // Cập nhật trạng thái (ví dụ: "Đang phân tách người nói...")
+                            setProgress(0, event.message || "Đang xử lý...");
+                            fileStatusText.textContent = event.message || "Đang xử lý...";
+                            
+                        } else if (event.type === "segment") {
+                            // Append text vào textarea
+                            segmentCount++;
+                            window.currentSegments.push(event); // Lưu dữ liệu gốc
+
+                            if (transcriptArea) {
+                                let formattedText = smartFormatSegment(event);
+                                
+                                // Nếu có phân tách người nói
+                                if (event.speaker && event.speaker !== "Không rõ") {
+                                    if (event.speaker !== lastSpeakerText) {
+                                        // Người nói mới => Xuống dòng và chèn tên
+                                        let prefix = `\n\n[${event.speaker}]: `;
+                                        if (!transcriptArea.value) prefix = `[${event.speaker}]: `; // Nếu là dòng đầu tiên
+                                        
+                                        transcriptArea.value += prefix + formattedText;
+                                        lastSpeakerText = event.speaker;
+                                    } else {
+                                        // Cùng người nói => Nối tiếp
+                                        transcriptArea.value += (transcriptArea.value && !transcriptArea.value.endsWith("\n") && !transcriptArea.value.endsWith(" ") ? " " : "") + formattedText;
+                                    }
+                                } else {
+                                    // Không có diarization
+                                    transcriptArea.value += (transcriptArea.value && !transcriptArea.value.endsWith("\n") && !transcriptArea.value.endsWith(" ") ? " " : "") + formattedText;
+                                }
+                                
+                                // Auto-scroll xuống dưới
+                                transcriptArea.scrollTop = transcriptArea.scrollHeight;
+                            }
+                            // Cập nhật progress
+                            const pct = event.progress || 0;
+                            const cur = formatDuration(event.end);
+                            const tot = formatDuration(totalDuration);
+                            setProgress(pct, `${pct}% — ${cur} / ${tot} (${segmentCount} đoạn)`);
+
+                        } else if (event.type === "done") {
+                            // Hoàn tất
+                            setProgress(100, `✅ Hoàn tất! ${event.total_segments || segmentCount} đoạn — ${formatDuration(totalDuration)}`);
+                            log(`Stream STT hoàn tất: ${event.total_segments || segmentCount} segments`, "success");
+
+                        } else if (event.type === "error") {
+                            throw new Error(event.message);
+                        }
+                    }
                 }
+
+                // Kết thúc bình thường
+                fileStatusText.textContent = `✅ Hoàn tất: ${file.name}`;
+                fileStatusText.className   = "status-text status-listening";
+
+                const wordCount = (transcriptArea?.value || "").trim().split(/\s+/).filter(Boolean).length;
+                if (transcriptStats) {
+                    transcriptStats.textContent = `${segmentCount} đoạn · ${wordCount} từ · ${formatDuration(totalDuration)}`;
+                }
+
+                if (transcriptArea?.value.trim()) {
+                    if (btnDownload) btnDownload.disabled = false;
+                    if (btnDownloadSrt && window.currentSegments.length > 0) btnDownloadSrt.disabled = false;
+                }
+                if (btnClearTranscript) btnClearTranscript.style.display = "inline-flex";
 
             } catch (err) {
-                log(`Lỗi Upload File: ${err.message}`, "error");
-                fileStatusText.textContent = `${err.message}`;
-                fileStatusText.className = "status-text status-error";
+                if (!aborted) {
+                    log(`Lỗi stream STT: ${err.message}`, "error");
+                    fileStatusText.textContent = `❌ ${err.message}`;
+                    fileStatusText.className   = "status-text status-error";
+                    if (progressLabel) progressLabel.textContent = "Đã dừng do lỗi";
+
+                    // Nếu đã có transcript một phần → vẫn cho download
+                    if (transcriptArea?.value.trim()) {
+                        if (btnDownload) btnDownload.disabled = false;
+                        if (btnDownloadSrt && window.currentSegments.length > 0) btnDownloadSrt.disabled = false;
+                        if (transcriptStats) transcriptStats.textContent += " (kết quả một phần)";
+                    }
+                }
             } finally {
-                fileInput.disabled = false;
-                fileInput.value = ""; // reset file 
-                btnUpload.disabled = true; 
-                if (spinner) spinner.style.display = "none";
+                setProcessingState(false, file.name);
+                fileInput.value  = ""; // Reset input nhưng giữ transcript
+                btnUpload.disabled = true;
             }
+        });
+    }
+
+    // ===== Hàm tiện ích sinh file SRT =====
+    function formatTimeSrt(seconds) {
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = Math.floor(seconds % 60);
+        const ms = Math.floor((seconds % 1) * 1000);
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
+    }
+
+    function generateSrtData(segments) {
+        let srtContent = "";
+        segments.forEach((seg, index) => {
+            srtContent += `${index + 1}\n`;
+            srtContent += `${formatTimeSrt(seg.start)} --> ${formatTimeSrt(seg.end)}\n`;
+            let text = seg.text;
+            if (seg.speaker && seg.speaker !== "Không rõ") {
+                text = `[${seg.speaker}]: ${text}`;
+            }
+            srtContent += `${text}\n\n`;
+        });
+        return srtContent;
+    }
+
+    // ===== Nút Download .txt =====
+    if (btnDownload) {
+        btnDownload.addEventListener("click", () => {
+            const text = transcriptArea?.value?.trim();
+            if (!text) return;
+
+            const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+            const url  = URL.createObjectURL(blob);
+            const a    = document.createElement("a");
+            a.href     = url;
+            a.download = `transcript_${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.txt`;
+            a.click();
+            URL.revokeObjectURL(url);
+            log("Đã tải file transcript .txt", "success");
+        });
+    }
+
+    // ===== Nút Download .srt =====
+    const btnDownloadSrt = document.getElementById("btn-download-srt");
+    if (btnDownloadSrt) {
+        btnDownloadSrt.addEventListener("click", () => {
+            if (!window.currentSegments || window.currentSegments.length === 0) return;
+
+            const srtContent = generateSrtData(window.currentSegments);
+            const blob = new Blob([srtContent], { type: "text/plain;charset=utf-8" });
+            const url  = URL.createObjectURL(blob);
+            const a    = document.createElement("a");
+            a.href     = url;
+            a.download = `subtitle_${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.srt`;
+            a.click();
+            URL.revokeObjectURL(url);
+            log("Đã xuất file phụ đề .srt", "success");
+        });
+    }
+
+    // ===== Nút Xóa transcript =====
+    if (btnClearTranscript) {
+        btnClearTranscript.addEventListener("click", () => {
+            if (transcriptArea) transcriptArea.value = "";
+            if (btnDownload)    btnDownload.disabled = true;
+            if (transcriptStats) transcriptStats.textContent = "";
+            if (progressContainer) progressContainer.style.display = "none";
+            fileStatusText.textContent = "Chọn file audio/video để tải lên";
+            fileStatusText.className   = "status-text status-ready";
+            btnClearTranscript.style.display = "none";
+            log("Đã xóa transcript", "info");
         });
     }
 

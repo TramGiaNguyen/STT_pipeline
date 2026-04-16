@@ -283,7 +283,7 @@ class STTEngine:
                 if word_timestamps and hasattr(seg, "words") and seg.words:
                     segment_dict["words"] = [
                         {
-                            "word": w.word.strip(),
+                            "word": w.word.lstrip(),
                             "start": round(w.start, 2),
                             "end": round(w.end, 2),
                         }
@@ -339,6 +339,121 @@ class STTEngine:
         """
         segments = self.transcribe(audio_path, language=language)
         return " ".join(seg["text"] for seg in segments)
+
+    def transcribe_stream(
+        self,
+        audio_input: Union[str, Path, np.ndarray],
+        language: Optional[str] = None,
+        beam_size: int = 8,
+        condition_on_previous_text: bool = False,
+        no_speech_threshold: float = 0.5,
+        compression_ratio_threshold: float = 2.2,
+    ):
+        """
+        Stream từng segment nhận dạng giọng nói ngay khi faster-whisper xử lý xong.
+
+        Khác với transcribe() vốn phải đợi toàn bộ file, phương thức này yield
+        từng dict ngay khi mỗi segment hoàn thành — phù hợp để stream SSE cho
+        file dài (4 phút đến 3 tiếng) mà không bị timeout.
+
+        Yield các dict theo thứ tự:
+            {"type": "info",    "total_duration": 176.3, "language": "vi"}
+            {"type": "segment", "text": "...", "start": 0.5, "end": 2.1, "progress": 12}
+            (không yield "done" — caller tự xử lý khi generator kết thúc)
+
+        Tham số:
+            audio_input: Đường dẫn file âm thanh hoặc numpy array 16kHz float32
+            language: Mã ngôn ngữ ('vi', 'en', ...). None = tự động phát hiện
+            beam_size: Độ rộng beam search (mặc định 8)
+            condition_on_previous_text: False để chống hallucination cascading
+            no_speech_threshold: Ngưỡng lọc đoạn không có tiếng nói
+            compression_ratio_threshold: Ngưỡng phát hiện hallucination loop
+        """
+        is_numpy = isinstance(audio_input, np.ndarray)
+        if is_numpy:
+            audio_arg = audio_input
+            audio_label = f"numpy_array(shape={audio_input.shape})"
+            total_duration = len(audio_input) / 16000.0
+        else:
+            audio_arg = str(audio_input)
+            if not Path(audio_arg).exists():
+                raise FileNotFoundError(f"File âm thanh không tồn tại: {audio_arg}")
+            audio_label = audio_arg
+            # Ước tính duration từ file size (WAV 16kHz mono 16-bit = 32000 bytes/s)
+            try:
+                file_size = Path(audio_arg).stat().st_size
+                total_duration = file_size / 32000.0  # ước tính sơ bộ
+            except Exception:
+                total_duration = 0.0
+
+        logger.info(f"[Stream] Bắt đầu transcribe_stream: {audio_label}, ngôn ngữ: {language or 'tự động'}")
+
+        try:
+            segments_gen, info = self.model.transcribe(
+                audio=audio_arg,
+                language=language,
+                task="transcribe",
+                beam_size=beam_size,
+                vad_filter=True,
+                temperature=[0.0, 0.2, 0.4, 0.6], # Fallback tự động khi độ tin cậy thấp
+                initial_prompt="Chào các bạn. Xin chào, hôm nay chúng ta sẽ xem xét vấn đề này! Nó rất hay, và thú vị.", # Mồi ngữ pháp (Prompt Injection)
+                condition_on_previous_text=condition_on_previous_text,
+                no_speech_threshold=no_speech_threshold,
+                compression_ratio_threshold=compression_ratio_threshold,
+                word_timestamps=True, # Cần cho chức năng tạo SRT
+            )
+
+            # Dùng duration từ faster-whisper info (chính xác hơn ước tính)
+            real_duration = getattr(info, "duration", None) or total_duration
+            detected_language = getattr(info, "language", language or "vi")
+
+            # Event info đầu tiên để client biết tổng duration và ngôn ngữ
+            yield {
+                "type": "info",
+                "total_duration": round(real_duration, 2),
+                "language": detected_language,
+            }
+
+            segment_count = 0
+            for seg in segments_gen:
+                text = seg.text.strip()
+                if not text:
+                    continue
+
+                # Lấy words để làm phụ đề chính xác (WhisperX style)
+                words = []
+                if hasattr(seg, "words") and seg.words:
+                    for w in seg.words:
+                        words.append({
+                            "word": w.word.lstrip(),
+                            "start": round(w.start, 2),
+                            "end": round(w.end, 2),
+                            "probability": round(w.probability, 2)
+                        })
+
+                # Tính progress % dựa trên timestamp kết thúc của segment
+                progress = 0
+                if real_duration > 0:
+                    progress = min(99, int(seg.end / real_duration * 100))
+
+                segment_count += 1
+                logger.debug(f"[Stream] Segment {segment_count}: [{seg.start:.1f}s->{seg.end:.1f}s] {text[:60]}")
+
+                yield {
+                    "type": "segment",
+                    "id": segment_count,
+                    "text": text,
+                    "start": round(seg.start, 2),
+                    "end": round(seg.end, 2),
+                    "progress": progress,
+                    "words": words
+                }
+
+            logger.info(f"[Stream] Hoàn tất: {segment_count} segments, duration={real_duration:.1f}s")
+
+        except Exception as e:
+            logger.error(f"[Stream] Lỗi transcribe_stream: {e}")
+            yield {"type": "error", "message": str(e)}
 
     def __repr__(self) -> str:
         return (

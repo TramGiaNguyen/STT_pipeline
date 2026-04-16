@@ -633,3 +633,174 @@ body {
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
 }
+
+/* ==================== File Transcript UI ==================== */
+
+/* Model badge trong card header */
+.model-badge {
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    padding: 2px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+
+/* Progress bar */
+.progress-track {
+    width: 100%;
+    height: 8px;
+    background: var(--bg-primary);
+    border-radius: 4px;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--color-primary), #6366f1);
+    border-radius: 4px;
+    transition: width 0.5s ease;
+    box-shadow: 0 0 8px var(--color-primary-glow);
+}
+
+.progress-label {
+    font-size: 0.78rem;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    margin-top: 5px;
+}
+
+/* Transcript area */
+.transcript-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+    gap: var(--space-sm);
+}
+
+.transcript-title {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.transcript-actions {
+    display: flex;
+    gap: var(--space-sm);
+    flex-wrap: wrap;
+}
+
+.btn-sm {
+    height: 34px;
+    padding: var(--space-xs) var(--space-md);
+    font-size: 0.82rem;
+    min-width: unset;
+}
+
+.transcript-area {
+    width: 100%;
+    min-height: 280px;
+    max-height: 520px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: var(--space-md);
+    font-family: var(--font-sans);
+    font-size: 0.95rem;
+    line-height: 1.7;
+    resize: vertical;
+    outline: none;
+    transition: border-color var(--transition-fast);
+    overflow-y: auto;
+}
+
+.transcript-area:focus {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px var(--color-primary-glow);
+}
+
+.transcript-area::-webkit-scrollbar {
+    width: 6px;
+}
+
+.transcript-area::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 3px;
+}
+
+.transcript-stats {
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    margin-top: 6px;
+    text-align: right;
+}
+
+/* Prompt input */
+.prompt-input {
+    width: 100%;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    padding: var(--space-sm) var(--space-md);
+    font-family: var(--font-sans);
+    font-size: 0.88rem;
+    line-height: 1.5;
+    resize: vertical;
+    min-height: 60px;
+    outline: none;
+    transition: border-color var(--transition-fast);
+}
+
+.prompt-input:focus {
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px var(--color-primary-glow);
+}
+
+.prompt-input::placeholder {
+    color: var(--text-muted);
+}
+
+.input-group {
+    width: 100%;
+}
+
+/* Nút download transcript */
+.btn-download {
+    background: linear-gradient(135deg, #059669, #047857);
+    color: white;
+    border: none;
+    min-width: 140px;
+}
+
+.btn-download:hover:not(:disabled) {
+    background: linear-gradient(135deg, #047857, #065f46);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
+}
+
+.btn-download:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
+}
+
+/* Row chứa nút download + stats */
+.file-action-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    flex-wrap: wrap;
+}
+
+/* Transcript area top margin */
+.transcript-area {
+    margin-top: 14px;
+}

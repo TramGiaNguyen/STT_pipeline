@@ -1,61 +1,23 @@
-# Các gói phụ thuộc của STT Module
-# Liệt kê tất cả thư viện Python cần thiết cho dự án và ràng buộc phiên bản
-
-# PyTorch CUDA: phải cài từ index-url chỉ định để dùng GPU NVIDIA
-# Cú pháp: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-# KHÔNG dùng PyPI mặc định vì chỉ có phiên bản CPU
-# Sau khi cài, kiểm tra: python -c "import torch; print(torch.cuda.is_available())"
-# Yêu cầu: CUDA Driver 12.8+, NVIDIA GPU với compute capability >= 5.0 (Pascal trở lên)
-# GPU được hỗ trợ: RTX 3060 (8.6), RTX 40xx, A100, H100, ...
-torch>=2.5.0
-torchvision>=0.20.0
-
-# faster-whisper: phiên bản tối ưu hóa của whisper dùng CTranslate2, tốc độ suy luận nhanh hơn
-faster-whisper>=1.0.0
-
-# pydub: thư viện xử lý âm thanh, hỗ trợ chuyển đổi, cắt, ghép nhiều định dạng âm thanh
+faster-whisper==1.0.0
+torch==2.4.1+cu121
+torchaudio==2.4.1+cu121
+torchvision==0.19.1+cu121
 pydub>=0.25.0
-
-# silero-vad: mô hình phát hiện hoạt động giọng nói Silero, dùng để lọc đoạn im lặng
 silero-vad>=0.0.5
-
-# huggingface-hub: công cụ chính thức của Hugging Face, hỗ trợ tải và quản lý mô hình/tập dữ liệu
+pyannote.audio==4.0.4
+pyannote.core==1.5
+soundfile==0.13.1
 huggingface-hub>=0.19.0
-
-# numpy: thư viện tính toán khoa học cơ bản của Python, dùng trong xử lý mảng âm thanh
 numpy>=1.24.0
-
-# pytest: framework unit test của Python, dùng để chạy các test case tự động
 pytest>=7.4.0
-
-# ======= Streaming STT (micro real-time) =======
-# sounddevice: thư viện thu âm từ micro, giao diện Python cho PortAudio
 sounddevice>=0.4.0
-
-# fastapi: web framework hiệu năng cao, hỗ trợ async và WebSocket
 fastapi>=0.100.0
-
-# uvicorn: ASGI server chạy FastAPI, hỗ trợ reload và multiprocess
 uvicorn[standard]>=0.23.0
-
-# websockets: thư viện WebSocket server/client, tương thích với FastAPI
 websockets>=11.0
-
-# scipy: thư viện tính toán khoa học, dùng cho signal processing (high-pass filter)
 scipy>=1.11.0
-
-# noisereduce: thư viện giảm nhiễu âm thanh bằng spectral gating
 noisereduce>=3.0.0
-
-# rnnoise-python: Python binding cho RNNoise (deep learning noise suppression)
-# RNNoise được Mozilla phát triển, rất hiệu quả cho giảm nhiễu real-time
-# LƯU Ý: Trên Windows có thể cần cài Visual C++ Build Tools
-# Alternative: logmmse (nếu rnnoise không hoạt động)
-rnnoise>=0.2.0
-
-# logmmse: Log-MMSE speech enhancement (alternative cho RNNoise)
-# Dùng nếu rnnoise không cài được trên Windows
 logmmse>=1.3.0
-
-# python-multipart: Gói bắt buộc cho FastAPI để xử lý định dạng form-data file upload (dành cho API /api/transcribe-file)
 python-multipart>=0.0.9
+httpx>=0.23.0
+jinja2>=3.1.3
+python-dotenv>=1.0.1
