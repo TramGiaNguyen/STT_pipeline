@@ -4,8 +4,7 @@ torchaudio==2.4.1+cu121
 torchvision==0.19.1+cu121
 pydub>=0.25.0
 silero-vad>=0.0.5
-pyannote.audio==4.0.4
-pyannote.core==1.5
+pyannote.audio>=3.1.1,<4.0.0
 soundfile==0.13.1
 huggingface-hub>=0.19.0
 numpy>=1.24.0
@@ -21,3 +20,5 @@ python-multipart>=0.0.9
 httpx>=0.23.0
 jinja2>=3.1.3
 python-dotenv>=1.0.1
+google-genai>=2.0.0
+python-docx>=1.1.0

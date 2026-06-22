@@ -31,6 +31,7 @@
         <div class="tabs">
             <button class="tab-button active" data-tab="tab-realtime">🎙️ Real-time (Mic)</button>
             <button class="tab-button" data-tab="tab-file">📁 Nhận dạng từ File</button>
+            <button class="tab-button" data-tab="tab-bienban">📝 Tạo Biên Bản Họp</button>
         </div>
 
         <!-- ==================== Control Card (Realtime) ==================== -->
@@ -139,11 +140,14 @@
             </div>
 
             <!-- Tùy chọn Diarization -->
-            <div style="margin-top: 10px; padding: 10px; background: rgba(51, 65, 85, 0.4); border-radius: 6px; border: 1px dashed rgba(148, 163, 184, 0.3);">
+            <div
+                style="margin-top: 10px; padding: 10px; background: rgba(51, 65, 85, 0.4); border-radius: 6px; border: 1px dashed rgba(148, 163, 184, 0.3);">
                 <label style="display: flex; align-items: center; cursor: pointer; color: #e2e8f0; font-size: 14px;">
-                    <input type="checkbox" id="diarize-checkbox" style="margin-right: 8px; cursor: pointer; width: 16px; height: 16px; accent-color: #3b82f6;">
+                    <input type="checkbox" id="diarize-checkbox"
+                        style="margin-right: 8px; cursor: pointer; width: 16px; height: 16px; accent-color: #3b82f6;">
                     <strong>Phân tách người nói (Speaker Diarization)</strong>
-                    <span style="margin-left: 6px; color: #94a3b8; font-size: 13px;">- Nhận dạng ai đang nói (tốn nhiều phần cứng & thời gian hơn)</span>
+                    <span style="margin-left: 6px; color: #94a3b8; font-size: 13px;">- Nhận dạng ai đang nói (tốn nhiều
+                        phần cứng & thời gian hơn)</span>
                 </label>
             </div>
 
@@ -182,6 +186,45 @@
                     Tải về phụ đề .srt
                 </button>
                 <span id="transcript-stats" class="transcript-stats"></span>
+            </div>
+        </section>
+
+        <!-- ==================== Biên Bản Họp Card ==================== -->
+        <section class="card tab-content" id="tab-bienban" aria-label="Tạo Biên Bản Họp">
+            <div class="card-header">
+                <h2 class="card-title">Tạo Biên Bản Họp từ Transcript</h2>
+            </div>
+
+            <!-- Upload file -->
+            <div class="control-panel file-upload-panel">
+                <input type="file" id="bb-file-input" class="file-input" accept=".srt,.txt" />
+                <button id="btn-generate-bb" class="btn btn-start" disabled>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        aria-hidden="true">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                    <span>Tạo Biên Bản Họp(.docx)</span>
+                </button>
+            </div>
+
+            <!-- Trạng thái -->
+            <div class="status-row" style="margin-top:14px;">
+                <span id="bb-status-text" class="status-text status-ready">Chọn file .srt hoặc .txt để bắt đầu</span>
+                <span id="bb-spinner" class="spinner" style="display:none;"></span>
+            </div>
+
+            <!-- Preview nội dung file -->
+            <textarea id="bb-preview-area" class="transcript-area" readonly
+                placeholder="Nội dung file sẽ hiển thị tại đây sau khi upload...&#10;&#10;Hỗ trợ file .srt (phụ đề) và .txt (phiên âm thuần văn bản)."
+                aria-label="Preview nội dung transcript"></textarea>
+
+            <!-- Thống kê -->
+            <div class="file-action-row" style="margin-top:12px;">
+                <span id="bb-stats" class="transcript-stats"></span>
             </div>
         </section>
 

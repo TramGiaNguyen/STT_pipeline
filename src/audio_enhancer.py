@@ -72,6 +72,7 @@ class AudioEnhancer:
         apply_denoising: bool = True,
         apply_normalization: bool = True,
         apply_vad_filtering: bool = True,
+        apply_compression: bool = True,
     ):
         """
         Khởi tạo AudioEnhancer với các tham số điều chỉnh
@@ -90,6 +91,8 @@ class AudioEnhancer:
             apply_denoising: Có áp dụng spectral gating giảm nhiễu không
             apply_normalization: Có normalize biên độ không
             apply_vad_filtering: Có lọc đoạn im lặng bằng năng lượng không
+            apply_compression: Có áp dụng nén dải động (DRC) không. Khuếch đại đoạn
+                              nói nhỏ lên gần mức nói bình thường. Mặc định True.
         """
         self.sample_rate = sample_rate
         self.noise_threshold = noise_threshold
@@ -99,6 +102,7 @@ class AudioEnhancer:
         self.apply_denoising = apply_denoising
         self.apply_normalization = apply_normalization
         self.apply_vad_filtering = apply_vad_filtering
+        self.apply_compression = apply_compression
 
         # Noise profile sẽ được ước tính từ dữ liệu thực tế
         self._noise_profile: Optional[np.ndarray] = None
@@ -110,7 +114,8 @@ class AudioEnhancer:
 
         logger.debug(
             f"Khởi tạo AudioEnhancer: sr={sample_rate}, noise_th={noise_threshold}, "
-            f"min_speech={min_speech_duration}s, target_db={normalize_target_db}dB"
+            f"min_speech={min_speech_duration}s, target_db={normalize_target_db}dB, "
+            f"compression={apply_compression}"
         )
 
     # ========== PHƯƠNG THỨC CHÍNH ==========
@@ -146,6 +151,10 @@ class AudioEnhancer:
         # Bước 4: Normalize biên độ
         if self.apply_normalization:
             audio = self._rms_normalize(audio)
+
+        # Bước 4.5: Nén dải động — kéo đoạn nói nhỏ lên gần mức nói bình thường
+        if self.apply_compression:
+            audio = self.dynamic_range_compress(audio)
 
         # Bước 5: Trích xuất đoạn có giọng nói (loại bỏ im lặng)
         if self.apply_vad_filtering:
@@ -382,6 +391,140 @@ class AudioEnhancer:
 
         return np.clip(normalized, -1.0, 1.0)
 
+    # ========== KỸ THUẬT 3.5: NÉN DẢI ĐỘNG (DRC) ==========
+
+    def dynamic_range_compress(
+        self,
+        audio: np.ndarray,
+        window_sec: float = 0.05,
+        max_gain_db: float = 20.0,
+        smoothing_sec: float = 0.15,
+    ) -> np.ndarray:
+        """
+        Nén dải động (Upward Compression) — khuếch đại đoạn nói nhỏ, giữ nguyên đoạn to
+
+        Kỹ thuật này giải quyết vấn đề người nói nhỏ bị mất đoạn trong cuộc họp.
+        Thay vì normalize toàn cục (kéo cả file lên cùng 1 mức), DRC phân tích
+        từng đoạn ngắn và khuếch đại riêng những đoạn có năng lượng thấp.
+
+        Thuật toán:
+            1. Chia audio thành window nhỏ (50ms, overlap 50%)
+            2. Tính RMS từng window
+            3. Xác định mức "bình thường" = percentile 60 của các đoạn có giọng nói
+            4. Tính gain cần thiết để đưa đoạn nhỏ lên mức bình thường
+            5. Giới hạn gain tối đa (max_gain_db) để không boost nhiễu
+            6. Smooth gain curve bằng moving average để tránh artifact
+            7. Nội suy gain ra từng sample và áp dụng
+
+        Tham số:
+            audio: Numpy array 1D float32 [-1, 1]
+            window_sec: Kích thước window phân tích (giây). Mặc định 0.05s (50ms)
+            max_gain_db: Khuếch đại tối đa cho phép (dB). Mặc định 20dB (~10x)
+            smoothing_sec: Thời gian smooth gain (giây). Mặc định 0.15s
+
+        Trả về:
+            Âm thanh đã nén dải động, đoạn nhỏ được khuếch đại
+        """
+        audio = self._prepare_audio(audio)
+
+        if len(audio) == 0:
+            return audio
+
+        window_samples = int(window_sec * self.sample_rate)
+        hop_samples = window_samples // 2  # 50% overlap
+
+        # Bước 1: Tính RMS từng window
+        num_windows = max(1, (len(audio) - window_samples) // hop_samples + 1)
+        rms_per_window = np.zeros(num_windows, dtype=np.float32)
+
+        for i in range(num_windows):
+            start = i * hop_samples
+            end = min(start + window_samples, len(audio))
+            chunk = audio[start:end]
+            rms_per_window[i] = np.sqrt(np.mean(chunk ** 2))
+
+        # Bước 2: Phân biệt speech vs noise bằng noise floor thích ứng
+        # Tính noise floor từ các window có năng lượng thấp nhất
+        non_zero = rms_per_window[rms_per_window > 1e-6]
+        if len(non_zero) < 5:
+            logger.debug("DRC: quá ít window có âm thanh, bỏ qua")
+            return audio
+
+        # Noise floor = percentile 10 của các window có âm thanh
+        noise_floor = float(np.percentile(non_zero, 10))
+        # Ngưỡng tối thiểu để coi là speech: noise_floor * 3 (hoặc tối thiểu 0.003)
+        # → Tránh khuếch đại nhiễu/tạp âm, chỉ boost giọng nói thật
+        min_speech_rms = max(noise_floor * 3.0, 0.003)
+
+        speech_mask = rms_per_window > min_speech_rms
+        speech_rms = rms_per_window[speech_mask]
+
+        if len(speech_rms) < 5:
+            logger.debug(
+                f"DRC: quá ít đoạn speech (noise_floor={noise_floor:.6f}, "
+                f"min_speech_rms={min_speech_rms:.6f}), bỏ qua"
+            )
+            return audio
+
+        # Target = percentile 60 → mức nói "bình thường" trong file
+        target_rms = float(np.percentile(speech_rms, 60))
+
+        if target_rms < 0.005:
+            logger.debug(f"DRC: target_rms quá thấp ({target_rms:.6f}), bỏ qua")
+            return audio
+
+        logger.debug(
+            f"DRC: noise_floor={noise_floor:.6f}, min_speech_rms={min_speech_rms:.6f}, "
+            f"target_rms={target_rms:.4f}"
+        )
+
+        # Bước 3: Tính gain cho từng window
+        max_gain = 10 ** (max_gain_db / 20)  # Chuyển dB sang linear
+        gains = np.ones(num_windows, dtype=np.float32)
+
+        for i in range(num_windows):
+            rms = rms_per_window[i]
+            if rms < min_speech_rms:
+                # Dưới ngưỡng speech (nhiễu/tạp âm/im lặng) → KHÔNG boost
+                gains[i] = 1.0
+            elif rms < target_rms:
+                # Đoạn speech nhỏ → khuếch đại lên mức target
+                desired_gain = target_rms / rms
+                gains[i] = min(desired_gain, max_gain)
+            else:
+                # Đoạn to → giữ nguyên (upward compression only)
+                gains[i] = 1.0
+
+        # Bước 4: Smooth gain curve để tránh artifact (biến đổi gain đột ngột)
+        smooth_windows = max(1, int(smoothing_sec / (hop_samples / self.sample_rate)))
+        if smooth_windows > 1 and len(gains) > smooth_windows:
+            kernel = np.ones(smooth_windows) / smooth_windows
+            gains = np.convolve(gains, kernel, mode='same').astype(np.float32)
+
+        # Bước 5: Nội suy gain từ window-level ra sample-level
+        window_centers = np.arange(num_windows) * hop_samples + window_samples // 2
+        window_centers = np.clip(window_centers, 0, len(audio) - 1)
+        gain_curve = np.interp(
+            np.arange(len(audio)),
+            window_centers,
+            gains,
+        ).astype(np.float32)
+
+        # Bước 6: Áp dụng gain và clip về [-1, 1]
+        compressed = audio * gain_curve
+        compressed = np.clip(compressed, -1.0, 1.0)
+
+        # Log thống kê
+        boosted_count = int(np.sum(gains > 1.1))
+        avg_boost = float(np.mean(gains[gains > 1.1])) if boosted_count > 0 else 1.0
+        logger.info(
+            f"DRC: target_rms={target_rms:.4f}, "
+            f"boosted {boosted_count}/{num_windows} windows, "
+            f"avg_boost={avg_boost:.2f}x, max_gain={float(np.max(gains)):.2f}x"
+        )
+
+        return compressed
+
     # ========== KỸ THUẬT 4: VAD DỰA TRÊN NĂNG LƯỢNG ==========
 
     def extract_speech_chunks(
@@ -440,8 +583,27 @@ class AudioEnhancer:
 
         rms_values = np.array(rms_values)
 
-        # Phân loại speech/silence dựa trên threshold
-        is_speech = rms_values > self.noise_threshold
+        # Phân loại speech/silence dựa trên ngưỡng THÍCH ỨNG
+        # Thay vì dùng ngưỡng cố định, tính dựa trên phân phối năng lượng thực tế
+        # → Phát hiện được giọng nói nhỏ trong file có dynamic range rộng
+        non_silent = rms_values[rms_values > 0.001]  # Lọc im lặng tuyệt đối
+        if len(non_silent) > 10:
+            # Ngưỡng adaptive = percentile 15 * 0.7 (bắt cả đoạn nói nhỏ)
+            adaptive_threshold = float(np.percentile(non_silent, 15)) * 0.7
+            # Giới hạn: min = noise_threshold * 0.3, max = noise_threshold
+            adaptive_threshold = float(np.clip(
+                adaptive_threshold,
+                self.noise_threshold * 0.3,
+                self.noise_threshold,
+            ))
+            logger.debug(
+                f"VAD adaptive threshold: {adaptive_threshold:.6f} "
+                f"(fixed={self.noise_threshold:.4f})"
+            )
+        else:
+            adaptive_threshold = self.noise_threshold
+
+        is_speech = rms_values > adaptive_threshold
 
         # Chuyển index window -> timestamp
         def idx_to_time(idx: int) -> float:
@@ -698,7 +860,8 @@ class AudioEnhancer:
         return (
             f"AudioEnhancer(sr={self.sample_rate}, noise_th={self.noise_threshold}, "
             f"min_speech={self.min_speech_duration}s, "
-            f"normalize_db={self.normalize_target_db}dB)"
+            f"normalize_db={self.normalize_target_db}dB, "
+            f"compression={self.apply_compression})"
         )
 
 

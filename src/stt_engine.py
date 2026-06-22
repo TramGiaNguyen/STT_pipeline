@@ -54,6 +54,15 @@ class STTEngine:
     # Thiết bị được hỗ trợ theo thứ tự ưu tiên: GPU > CPU
     SUPPORTED_DEVICES = ["cuda", "cpu"]
 
+    # Cấu hình VAD mặc định tối ưu cho việc tách câu tiếng Việt tự nhiên trong hội thoại nhanh/ngắn
+    DEFAULT_VAD_PARAMETERS = {
+        "threshold": 0.5,
+        "min_speech_duration_ms": 250,
+        "max_speech_duration_s": 15,       # Giới hạn phân đoạn tối đa 15s để tránh gom quá dài
+        "min_silence_duration_ms": 600,     # Khoảng lặng tối thiểu 600ms để VAD cắt câu nhạy bén hơn
+        "speech_pad_ms": 400
+    }
+
     # Kiểu compute type khả dụng trên CUDA (sắp xếp theo tốc độ từ nhanh đến chậm)
     CUDA_COMPUTE_TYPES = ["bfloat16", "float16", "int8_float16", "float32"]
     # Kiểu compute type khả dụng trên CPU
@@ -253,6 +262,12 @@ class STTEngine:
 
         logger.info(f"Bắt đầu nhận dạng: {audio_label}, ngôn ngữ: {language or 'tự động'}")
 
+        if vad_filter and vad_parameters is None:
+            vad_parameters = self.DEFAULT_VAD_PARAMETERS
+
+        if initial_prompt is None:
+            initial_prompt = "Xin chào! Việc này là bắt buộc: viết hoa chữ cái đầu câu, thêm đủ dấu phẩy, dấu chấm. Giữ nguyên thuật ngữ tiếng Anh (RACI, KPI, Microservices, BDU Assistant, STEAM, Dashboard), không phiên âm sang tiếng Việt."
+
         try:
             # Gọi faster-whisper để suy luận
             # faster-whisper hỗ trợ trực tiếp numpy array nên dùng audio_arg
@@ -278,6 +293,8 @@ class STTEngine:
                     "text": seg.text.strip(),
                     "start": round(seg.start, 2),
                     "end": round(seg.end, 2),
+                    "no_speech_prob": getattr(seg, "no_speech_prob", 0.0),
+                    "avg_logprob": getattr(seg, "avg_logprob", 0.0),
                 }
                 # Nếu bật timestamp cấp từ, thêm thông tin từ
                 if word_timestamps and hasattr(seg, "words") and seg.words:
@@ -346,8 +363,9 @@ class STTEngine:
         language: Optional[str] = None,
         beam_size: int = 8,
         condition_on_previous_text: bool = False,
-        no_speech_threshold: float = 0.5,
-        compression_ratio_threshold: float = 2.2,
+        no_speech_threshold: float = 0.35,
+        compression_ratio_threshold: float = 1.8,
+        vad_parameters: Optional[dict] = None,
     ):
         """
         Stream từng segment nhận dạng giọng nói ngay khi faster-whisper xử lý xong.
@@ -388,6 +406,9 @@ class STTEngine:
 
         logger.info(f"[Stream] Bắt đầu transcribe_stream: {audio_label}, ngôn ngữ: {language or 'tự động'}")
 
+        if vad_parameters is None:
+            vad_parameters = self.DEFAULT_VAD_PARAMETERS
+
         try:
             segments_gen, info = self.model.transcribe(
                 audio=audio_arg,
@@ -395,8 +416,9 @@ class STTEngine:
                 task="transcribe",
                 beam_size=beam_size,
                 vad_filter=True,
+                vad_parameters=vad_parameters,
                 temperature=[0.0, 0.2, 0.4, 0.6], # Fallback tự động khi độ tin cậy thấp
-                initial_prompt="Chào các bạn. Xin chào, hôm nay chúng ta sẽ xem xét vấn đề này! Nó rất hay, và thú vị.", # Mồi ngữ pháp (Prompt Injection)
+                initial_prompt="Xin chào! Việc này là bắt buộc: viết hoa chữ cái đầu câu, thêm đủ dấu phẩy, dấu chấm. Giữ nguyên thuật ngữ tiếng Anh (RACI, KPI, Microservices, BDU Assistant, STEAM, Dashboard), không phiên âm sang tiếng Việt.", # Mồi chuyên ngành và ngữ pháp
                 condition_on_previous_text=condition_on_previous_text,
                 no_speech_threshold=no_speech_threshold,
                 compression_ratio_threshold=compression_ratio_threshold,
@@ -415,10 +437,100 @@ class STTEngine:
             }
 
             segment_count = 0
+            filtered_count = 0
+
+            # Blacklist các câu ảo giác kinh điển của Whisper tiếng Việt
+            _hallucination_blacklist = [
+                "cảm ơn các bạn", "đăng ký kênh", "ông cũng bị cáo buộc",
+                "đài truyền hình", "bản tin", "xin chào các bạn",
+                "hẹn gặp lại", "subtitles by", "tổng thống",
+                "tác phẩm nghệ thuật", "những thông tin tiếp theo",
+                "hàng trăm tình nguyện viên", "cảnh sát đã không tìm thấy",
+                "chính quyền", "tàn phá", "đoạn trích truyện",
+                "homestay và thư giãn", "cơ chế văn pháp",
+                "tập trận", "dấu hiệu vụ việc",
+            ]
+
             for seg in segments_gen:
                 text = seg.text.strip()
                 if not text:
                     continue
+
+                # === BỘ LỌC HALLUCINATION (tương tự stt_ws.py) ===
+
+                # Filter 1: no_speech_prob cao → segment là tiếng ồn, không phải lời nói
+                no_speech_prob = getattr(seg, "no_speech_prob", 0.0)
+                if no_speech_prob > 0.4:
+                    filtered_count += 1
+                    logger.info(
+                        f"[Stream] Filter no_speech: prob={no_speech_prob:.3f}, "
+                        f"text='{text[:60]}'"
+                    )
+                    continue
+
+                # Filter 2: avg_logprob cực thấp → Whisper rất không tự tin
+                avg_logprob = getattr(seg, "avg_logprob", 0.0)
+                if avg_logprob < -0.8:
+                    filtered_count += 1
+                    logger.info(
+                        f"[Stream] Filter low confidence: logprob={avg_logprob:.3f}, "
+                        f"text='{text[:60]}'"
+                    )
+                    continue
+
+                # Filter 3: Blacklist ảo giác
+                text_lower = text.lower()
+                if any(bad in text_lower for bad in _hallucination_blacklist):
+                    filtered_count += 1
+                    logger.warning(f"[Stream] Filter BLACKLIST: '{text[:80]}'")
+                    continue
+
+                # Filter 4: Tốc độ từ/giây bất thường (Whisper bịa text dài hơn audio)
+                seg_duration = seg.end - seg.start
+                if seg_duration > 0:
+                    words_count = len(text.split())
+                    words_per_sec = words_count / seg_duration
+                    if words_per_sec > 8.0 and words_count > 6:
+                        filtered_count += 1
+                        logger.warning(
+                            f"[Stream] Filter speed: {words_per_sec:.1f} words/s, "
+                            f"text='{text[:60]}'"
+                        )
+                        continue
+
+                # Filter 5: Lặp từ (hallucination loop)
+                seg_words = text.split()
+                if len(seg_words) > 5:
+                    unique_ratio = len(set(seg_words)) / len(seg_words)
+                    if unique_ratio < 0.4:
+                        filtered_count += 1
+                        logger.warning(
+                            f"[Stream] Filter repeat ({unique_ratio:.0%} unique): "
+                            f"'{text[:60]}'"
+                        )
+                        continue
+
+                    # Kiểm tra cụm từ lặp liên tiếp
+                    is_phrase_repeat = False
+                    for i in range(len(seg_words) - 2):
+                        phrase = " ".join(seg_words[i:i+3])
+                        if text.count(phrase) > 3:
+                            is_phrase_repeat = True
+                            logger.warning(
+                                f"[Stream] Filter phrase repeat '{phrase}': "
+                                f"'{text[:60]}'"
+                            )
+                            break
+                    if is_phrase_repeat:
+                        filtered_count += 1
+                        continue
+
+                # Filter 6: Text quá ngắn (1-2 ký tự) — thường là hallucination
+                if len(text) <= 2:
+                    filtered_count += 1
+                    continue
+
+                # === SEGMENT HỢP LỆ → yield ===
 
                 # Lấy words để làm phụ đề chính xác (WhisperX style)
                 words = []
@@ -446,10 +558,15 @@ class STTEngine:
                     "start": round(seg.start, 2),
                     "end": round(seg.end, 2),
                     "progress": progress,
-                    "words": words
+                    "words": words,
+                    "no_speech_prob": round(no_speech_prob, 3),
+                    "avg_logprob": round(avg_logprob, 3),
                 }
 
-            logger.info(f"[Stream] Hoàn tất: {segment_count} segments, duration={real_duration:.1f}s")
+            logger.info(
+                f"[Stream] Hoàn tất: {segment_count} segments yield, "
+                f"{filtered_count} filtered, duration={real_duration:.1f}s"
+            )
 
         except Exception as e:
             logger.error(f"[Stream] Lỗi transcribe_stream: {e}")

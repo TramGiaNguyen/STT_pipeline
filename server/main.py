@@ -3,6 +3,10 @@ import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
+
+# Nạp biến môi trường từ file .env (nếu có) – phải chạy trước mọi import khác
+from dotenv import load_dotenv
+load_dotenv()
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -159,8 +163,7 @@ async def transcribe_stream_endpoint(
     if not STTWebSocketHandler._initialized or STTWebSocketHandler._stt_engine is None:
         raise HTTPException(status_code=503, detail="Máy chủ STT chưa sẵn sàng")
 
-    from src.audio_utils import convert_to_16k_mono
-    from src.audio_enhancer import enhance_audio_file
+    from src.audio_utils import convert_to_16k_mono, convert_to_wav_mono, enhance_audio_file
 
     # 1. Lưu file upload vào temp
     suffix = Path(file.filename).suffix if file.filename else ".tmp"
@@ -184,9 +187,9 @@ async def transcribe_stream_endpoint(
             enhance_audio_file,
             input_path=temp_original,
             output_path=temp_enhanced,
-            sample_rate=16000,
-            target_db=-20.0,
-            apply_denoising=True
+            normalize_db=-20.0,
+            apply_denoising=True,
+            apply_vad_filtering=False # Không được cắt khoảng lặng để tránh lệch timestamp
         )
 
         # 2b. Luôn convert sang 16kHz mono WAV (Dù enhance_audio_file cũng có thể trả về, nhưng làm thế này đảm bảo format chuẩn nhất)
@@ -195,11 +198,15 @@ async def transcribe_stream_endpoint(
         await run_in_threadpool(convert_to_16k_mono, temp_enhanced, temp_converted)
         audio_path = temp_converted
 
+        # 2c. Tạo bản sao mono gốc CHO DIARIZATION (không bị ảnh hưởng bởi lọc nhiễu và resample)
+        temp_diarization = temp_original + "_diarize.wav"
+        await run_in_threadpool(convert_to_wav_mono, temp_original, temp_diarization)
+
         logger.info(f"Audio đã sẵn sàng (đã Enhanced & Normalized) để stream: {audio_path}")
         
     except Exception as e:
         # Dọn dẹp nếu lỗi trước khi stream
-        for p in [temp_original, temp_enhanced, temp_converted]:
+        for p in [temp_original, temp_enhanced, temp_converted, temp_diarization if 'temp_diarization' in locals() else None]:
             if p and os.path.exists(p):
                 try:
                     os.remove(p)
@@ -227,25 +234,43 @@ async def transcribe_stream_endpoint(
                     )
                     from src.diarization import DiarizationProcessor
                     # Chạy process offline blocking function trong cái executor thread này luôn
-                    timeline = DiarizationProcessor.get_instance().process_audio(audio_path)
+                    timeline = DiarizationProcessor.get_instance().process_audio(temp_diarization)
+                    
+                    # --- DEBUG DUMP ---
+                    try:
+                        with open("timeline_debug.json", "w", encoding="utf-8") as f:
+                            import json
+                            json.dump(timeline, f, ensure_ascii=False, indent=2)
+                    except Exception:
+                        pass
+                    # ------------------
                 
-                # Hàm hỗ trợ map người nói
                 def get_speaker_for_segment(start, end, t_line):
                     if not t_line: return None
-                    midpoint = (start + end) / 2.0
-                    for turn in t_line:
-                        if turn["start"] <= midpoint <= turn["end"]:
-                            return turn["speaker"]
-                    # Nếu midpoint không nằm trong đoạn nào, lấy người nói có độ giao lớn nhất
-                    max_overlap = 0
                     best_speaker = None
+                    max_overlap = 0
+                    
+                    # Tìm tất cả các đoạn có giao nhau với [start, end] của từ
                     for turn in t_line:
                         overlap_start = max(start, turn["start"])
                         overlap_end = min(end, turn["end"])
                         overlap = max(0, overlap_end - overlap_start)
+                        
                         if overlap > max_overlap:
                             max_overlap = overlap
                             best_speaker = turn["speaker"]
+                            
+                    # Nếu không có giao thoa nào (từ nằm trong khoảng lặng của Pyannote)
+                    # thì dùng khoảng cách gần nhất
+                    if max_overlap == 0:
+                        midpoint = (start + end) / 2.0
+                        min_dist = float('inf')
+                        for turn in t_line:
+                            dist = min(abs(midpoint - turn["start"]), abs(midpoint - turn["end"]))
+                            if dist < min_dist:
+                                min_dist = dist
+                                best_speaker = turn["speaker"]
+                                
                     return best_speaker
                 
                 # 3.2: Chạy transcribe
@@ -258,35 +283,36 @@ async def transcribe_stream_endpoint(
                     if event_dict.get("type") == "segment" and diarize == "true":
                         words = event_dict.get("words", [])
                         if words and len(words) > 0:
+                            # Gán nhãn người nói cho từng chữ
+                            for w in words:
+                                w["speaker"] = get_speaker_for_segment(w["start"], w["end"], timeline)
+                                    
+                            # 3. Gom các từ theo người nói và yield segment
                             current_speaker = None
                             current_words = []
                             
                             for w in words:
-                                spk = get_speaker_for_segment(w["start"], w["end"], timeline) or "Không rõ"
+                                spk = w.get("speaker", "Không rõ")
                                 if current_speaker is None:
                                     current_speaker = spk
-                                
-                                # Nếu người nói thay đổi giữa chừng trong 1 segment dài
-                                if spk != current_speaker:
-                                    # Yield ngắt đoạn
-                                    sub_event = {
-                                        "type": "segment",
-                                        "start": current_words[0]["start"],
-                                        "end": current_words[-1]["end"],
-                                        "text": " ".join([xw["word"] for xw in current_words]).strip(),
-                                        "words": current_words,
-                                        "speaker": current_speaker,
-                                        "progress": event_dict.get("progress", 0)
-                                    }
-                                    loop.call_soon_threadsafe(queue.put_nowait, sub_event)
                                     
-                                    # Tạo đoạn mới
+                                if spk != current_speaker:
+                                    if current_words:
+                                        sub_event = {
+                                            "type": "segment",
+                                            "start": current_words[0]["start"],
+                                            "end": current_words[-1]["end"],
+                                            "text": " ".join([xw["word"] for xw in current_words]).strip(),
+                                            "words": current_words,
+                                            "speaker": current_speaker,
+                                            "progress": event_dict.get("progress", 0)
+                                        }
+                                        loop.call_soon_threadsafe(queue.put_nowait, sub_event)
                                     current_speaker = spk
                                     current_words = [w]
                                 else:
                                     current_words.append(w)
                                     
-                            # Yield phần còn lại cuối cùng
                             if current_words:
                                 sub_event = {
                                     "type": "segment",
@@ -333,7 +359,7 @@ async def transcribe_stream_endpoint(
 
         finally:
             # Dọn dẹp temp files sau khi stream xong
-            for p in [temp_original, temp_converted]:
+            for p in [temp_original, temp_converted, temp_diarization]:
                 if p and os.path.exists(p):
                     try:
                         os.remove(p)
@@ -395,9 +421,139 @@ async def transcribe_file_endpoint(
         logger.error(f"Lỗi khi xử lý file upload: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # Dọn dẹp
         if os.path.exists(temp_path):
             os.remove(temp_path)
+
+
+@app.post("/api/stt/subtitle_export")
+async def subtitle_export_endpoint(
+    file: UploadFile = File(...),
+    language: str = Form("vi")
+):
+    """
+    API Upload âm thanh và trả về trực tiếp file phụ đề (.srt)
+    Đã được cắt khối thời gian chuẩn và sửa lỗi các thuật ngữ tiếng Anh.
+    """
+    if not STTWebSocketHandler._initialized or STTWebSocketHandler._stt_engine is None:
+        raise HTTPException(status_code=503, detail="Máy chủ STT chưa sẵn sàng")
+
+    fd, temp_path = tempfile.mkstemp(suffix=Path(file.filename).suffix if file.filename else ".tmp")
+    try:
+        os.close(fd)
+        content = await file.read()
+        with open(temp_path, "wb") as f:
+            f.write(content)
+
+        # 1. Chạy Diarization trước để lấy mốc thời gian của từng người nói
+        from src.diarization import DiarizationProcessor
+        from src.audio_utils import convert_to_wav_mono
+        logger.info("[Subtitle Export] Đang convert định dạng và chạy Diarization...")
+        temp_diarization = temp_path + "_diarize.wav"
+        await run_in_threadpool(convert_to_wav_mono, temp_path, temp_diarization)
+        
+        try:
+            timeline = await run_in_threadpool(DiarizationProcessor.get_instance().process_audio, temp_diarization)
+        finally:
+            if os.path.exists(temp_diarization):
+                try:
+                    os.remove(temp_diarization)
+                except Exception:
+                    pass
+
+        # 2. Chạy STT Engine (Bật word_timestamps để Format SRT chia block)
+        engine = STTWebSocketHandler.get_engine()
+        logger.info("[Subtitle Export] Đang chạy Nhận dạng STT (có timestamps từ)...")
+        results = await run_in_threadpool(
+            engine.transcribe,
+            temp_path,
+            language=language,
+            vad_filter=True,
+            temperature=0.0,
+            beam_size=8,
+            condition_on_previous_text=False,
+            word_timestamps=True
+        )
+
+        # 3. Gắn nhãn và sinh file SRT chuẩn hóa bằng module mới
+        from src.subtitle_formatter import generate_srt
+        logger.info("[Subtitle Export] Đang định dạng và sinh phụ đề SRT...")
+        srt_content = await run_in_threadpool(
+            generate_srt, 
+            segments=results, 
+            diarization=timeline, 
+            max_words=12, 
+            max_duration=5.0
+        )
+
+        # Tạo Readable Streaming Response gửi file txt
+        import io
+        from fastapi.responses import StreamingResponse
+        stream = io.StringIO(srt_content)
+        original_name = Path(file.filename).stem if file.filename else "audio"
+        file_name = f"{original_name}_subtitle.srt"
+
+        return StreamingResponse(
+            iter([stream.getvalue()]),
+            media_type="text/plain",
+            headers={"Content-Disposition": f"attachment; filename={file_name}"}
+        )
+        
+    except Exception as e:
+        logger.error(f"Lỗi khi xử lý xuất phụ đề: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
+@app.post("/api/generate-bienban")
+async def generate_bienban_endpoint(
+    transcript: str = Form(...),
+    filename: str = Form("transcript"),
+):
+    """
+    Endpoint tạo biên bản họp từ transcript.
+    
+    Nhận nội dung transcript (plain text đã parse từ .srt/.txt),
+    gọi Gemini AI phân tích, fill vào template DOCX, trả về file .docx.
+    """
+    from server.bienban_generator import analyze_transcript_with_gemini, fill_docx_template
+    from starlette.concurrency import run_in_threadpool
+
+    if not transcript or not transcript.strip():
+        raise HTTPException(status_code=400, detail="Nội dung transcript trống")
+
+    try:
+        # 1. Gọi Gemini phân tích transcript
+        logger.info(f"[Biên bản] Bắt đầu phân tích transcript ({len(transcript)} ký tự)...")
+        analysis = await run_in_threadpool(analyze_transcript_with_gemini, transcript.strip())
+        logger.info(f"[Biên bản] Gemini phân tích xong, đang tạo DOCX...")
+
+        # 2. Fill vào template DOCX
+        docx_bytes = await run_in_threadpool(fill_docx_template, analysis)
+        logger.info(f"[Biên bản] Đã tạo file DOCX ({len(docx_bytes)} bytes)")
+
+        # 3. Trả về file .docx
+        import io
+        output_filename = f"Bien_ban_hop_{filename}.docx"
+        return StreamingResponse(
+            io.BytesIO(docx_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={
+                "Content-Disposition": f'attachment; filename="{output_filename}"',
+                "Content-Length": str(len(docx_bytes)),
+            },
+        )
+
+    except ValueError as e:
+        logger.error(f"[Biên bản] Lỗi: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        logger.error(f"[Biên bản] Không tìm thấy template: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"[Biên bản] Lỗi không xác định: {e}")
+        raise HTTPException(status_code=500, detail=f"Lỗi tạo biên bản: {e}")
 
 
 @app.websocket("/ws/stt")

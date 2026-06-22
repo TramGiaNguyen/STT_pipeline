@@ -1371,6 +1371,162 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    // =============== Biên Bản Họp Tab Logic ===============
+    const bbFileInput      = document.getElementById("bb-file-input");
+    const btnGenerateBB    = document.getElementById("btn-generate-bb");
+    const bbStatusText     = document.getElementById("bb-status-text");
+    const bbSpinner        = document.getElementById("bb-spinner");
+    const bbPreviewArea    = document.getElementById("bb-preview-area");
+    const bbStats          = document.getElementById("bb-stats");
+
+    /**
+     * Parse file .srt thành plain text
+     * Bỏ số thứ tự, timestamp, giữ speaker label nếu có
+     */
+    function parseSrtToText(srtContent) {
+        const lines = srtContent.split(/\r?\n/);
+        const textLines = [];
+        
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            
+            // Bỏ qua dòng số thứ tự (chỉ chứa số)
+            if (/^\d+$/.test(line)) continue;
+            
+            // Bỏ qua dòng timestamp (00:00:00,000 --> 00:00:27,859)
+            if (/^\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*-->/.test(line)) continue;
+            
+            // Bỏ qua dòng trống
+            if (!line) continue;
+            
+            // Giữ nguyên dòng text (bao gồm [Người nói X]: ...)
+            textLines.push(line);
+        }
+        
+        return textLines.join("\n");
+    }
+
+    // Khi chọn file cho biên bản
+    if (bbFileInput && btnGenerateBB) {
+        bbFileInput.addEventListener("change", () => {
+            if (bbFileInput.files.length > 0) {
+                const file = bbFileInput.files[0];
+                const ext = file.name.split(".").pop().toLowerCase();
+                
+                if (ext !== "srt" && ext !== "txt") {
+                    bbStatusText.textContent = "⚠️ Chỉ hỗ trợ file .srt hoặc .txt";
+                    bbStatusText.className = "status-text status-error";
+                    btnGenerateBB.disabled = true;
+                    return;
+                }
+
+                // Đọc file và hiển thị preview
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    let content = e.target.result;
+                    
+                    // Parse SRT nếu cần
+                    if (ext === "srt") {
+                        content = parseSrtToText(content);
+                    }
+                    
+                    if (bbPreviewArea) {
+                        bbPreviewArea.value = content;
+                    }
+                    
+                    // Thống kê
+                    const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
+                    const lineCount = content.trim().split(/\n/).length;
+                    if (bbStats) {
+                        bbStats.textContent = `${lineCount} dòng · ${wordCount} từ · ${file.name}`;
+                    }
+                    
+                    btnGenerateBB.disabled = false;
+                    bbStatusText.textContent = `Đã chọn: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+                    bbStatusText.className = "status-text status-listening";
+                };
+                reader.onerror = () => {
+                    bbStatusText.textContent = "❌ Không thể đọc file";
+                    bbStatusText.className = "status-text status-error";
+                };
+                reader.readAsText(file, "utf-8");
+            } else {
+                btnGenerateBB.disabled = true;
+                bbStatusText.textContent = "Chọn file .srt hoặc .txt để bắt đầu";
+                bbStatusText.className = "status-text status-ready";
+                if (bbPreviewArea) bbPreviewArea.value = "";
+                if (bbStats) bbStats.textContent = "";
+            }
+        });
+
+        // Nút Tạo Biên Bản
+        btnGenerateBB.addEventListener("click", async () => {
+            const transcript = bbPreviewArea?.value?.trim();
+            if (!transcript) {
+                bbStatusText.textContent = "⚠️ Không có nội dung transcript";
+                bbStatusText.className = "status-text status-error";
+                return;
+            }
+
+            // Lấy tên file gốc (bỏ extension) để đặt tên file output
+            const origName = bbFileInput.files[0]?.name?.replace(/\.[^.]+$/, "") || "transcript";
+
+            // Disable UI khi đang xử lý
+            btnGenerateBB.disabled = true;
+            bbFileInput.disabled = true;
+            if (bbSpinner) bbSpinner.style.display = "inline-block";
+            bbStatusText.textContent = "🤖 Đang gọi AI phân tích nội dung cuộc họp... (có thể mất 15-30 giây)";
+            bbStatusText.className = "status-text status-processing";
+            log("[Biên bản] Đang gửi transcript lên server...", "info");
+
+            try {
+                const formData = new FormData();
+                formData.append("transcript", transcript);
+                formData.append("filename", origName);
+
+                const response = await fetch("/api/generate-bienban", {
+                    method: "POST",
+                    body: formData,
+                });
+
+                if (!response.ok) {
+                    const errText = await response.text();
+                    throw new Error(`Server lỗi (${response.status}): ${errText}`);
+                }
+
+                // Nhận blob DOCX và trigger download
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                
+                // Lấy filename từ Content-Disposition header nếu có
+                const disposition = response.headers.get("Content-Disposition");
+                let downloadName = `Bien_ban_hop_${origName}.docx`;
+                if (disposition) {
+                    const match = disposition.match(/filename="?([^"]+)"?/);
+                    if (match) downloadName = match[1];
+                }
+                a.download = downloadName;
+                a.click();
+                URL.revokeObjectURL(url);
+
+                bbStatusText.textContent = `✅ Đã tạo biên bản thành công! File: ${downloadName}`;
+                bbStatusText.className = "status-text status-listening";
+                log(`[Biên bản] Đã tải file ${downloadName}`, "success");
+
+            } catch (err) {
+                bbStatusText.textContent = `❌ ${err.message}`;
+                bbStatusText.className = "status-text status-error";
+                log(`[Biên bản] Lỗi: ${err.message}`, "error");
+            } finally {
+                btnGenerateBB.disabled = false;
+                bbFileInput.disabled = false;
+                if (bbSpinner) bbSpinner.style.display = "none";
+            }
+        });
+    }
+
     // Kết nối WebSocket ngay khi trang load (để xác nhận server online)
     connectWebSocket();
 

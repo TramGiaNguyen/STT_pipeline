@@ -124,6 +124,68 @@ def convert_to_16k_mono(
         raise
 
 
+def convert_to_wav_mono(
+    audio_path: str,
+    output_path: Optional[str] = None,
+    bit_depth: int = 16
+) -> str:
+    """
+    Chuyển đổi file âm thanh bất kỳ sang định dạng WAV đơn âm PCM và giữ nguyên tần số mẫu gốc.
+    Được sử dụng cho Pyannote Diarization để tránh lỗi resample của pydub làm méo tiếng.
+
+    Tham số:
+        audio_path: Đường dẫn file âm thanh đầu vào, hỗ trợ mp3/wav/ogg/flac/m4a
+        output_path: Đường dẫn file đầu ra
+        bit_depth: Độ sâu bit đầu ra, mặc định 16-bit
+
+    Trả về:
+        Chuỗi đường dẫn tuyệt đối của file âm thanh đã chuyển đổi
+    """
+    input_path = Path(audio_path)
+    if not input_path.exists():
+        raise FileNotFoundError(f"File âm thanh không tồn tại: {audio_path}")
+
+    if output_path is None:
+        output_path = str(input_path.parent / "temp_wav_mono.wav")
+    else:
+        output_path = str(output_path)
+        if not output_path.lower().endswith(".wav"):
+            output_path += ".wav"
+
+    # Đảm bảo thư mục đầu ra tồn tại
+    output_dir = Path(output_path).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Bắt đầu convert_to_wav_mono: {audio_path} -> {output_path}")
+
+    try:
+        audio = AudioSegment.from_file(str(input_path))
+        original_sr = audio.frame_rate
+        original_channels = audio.channels
+
+        # Chuyển sang đơn âm nếu cần
+        if audio.channels > 1:
+            audio = audio.split_to_mono()[0]
+            logger.debug("Đã chuyển sang đơn âm")
+        elif audio.channels == 1:
+            logger.debug("Đầu vào đã là đơn âm, bỏ qua bước chuyển kênh")
+        else:
+            raise ValueError(f"Số kênh không được hỗ trợ: {audio.channels}")
+
+        # Giữ nguyên sample_rate gốc, chỉ thiết lập độ sâu bit
+        audio = audio.set_sample_width(bit_depth // 8)
+
+        # Xuất ra định dạng WAV
+        audio.export(output_path, format="wav", codec="pcm_s16le")
+        logger.info(f"Convert hoàn tất: {output_path}, SR: {original_sr}Hz")
+
+        return output_path
+
+    except Exception as e:
+        logger.error(f"Lỗi trong convert_to_wav_mono: {e}")
+        raise
+
+
 def get_audio_info(audio_path: str) -> dict:
     """
     Lấy thông tin cơ bản của file âm thanh (tần số mẫu, số kênh, thời lượng,...)

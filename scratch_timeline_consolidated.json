@@ -1,0 +1,1002 @@
+[
+  {
+    "start": 0.86,
+    "end": 1.41,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 2.44,
+    "end": 4.62,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 5.79,
+    "end": 13.36,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 14.36,
+    "end": 16.26,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 16.91,
+    "end": 18.1,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 17.02,
+    "end": 18.09,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 18.42,
+    "end": 22.49,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 21.18,
+    "end": 36.87,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 37.21,
+    "end": 39.2,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 40.01,
+    "end": 43.01,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 45.46,
+    "end": 57.91,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 57.91,
+    "end": 61.19,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 60.16,
+    "end": 60.54,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 61.64,
+    "end": 64.78,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 63.06,
+    "end": 63.43,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 65.78,
+    "end": 66.62,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 66.1,
+    "end": 67.55,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 68.17,
+    "end": 68.85,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 68.27,
+    "end": 70.77,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 71.28,
+    "end": 78.69,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 77.35,
+    "end": 78.55,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 78.96,
+    "end": 84.56,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 83.71,
+    "end": 86.14,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 87.24,
+    "end": 90.92,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 90.46,
+    "end": 93.15,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 94.26,
+    "end": 99.42,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 98.28,
+    "end": 98.94,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 99.73,
+    "end": 100.03,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 100.03,
+    "end": 102.12,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 102.65,
+    "end": 103.73,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 102.97,
+    "end": 110.73,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 109.08,
+    "end": 110.24,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 111.42,
+    "end": 117.48,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 115.59,
+    "end": 124.33,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 124.43,
+    "end": 125.46,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 124.8,
+    "end": 130.51,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 126.61,
+    "end": 127.86,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 130.95,
+    "end": 135.22,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 131.15,
+    "end": 133.02,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 136.6,
+    "end": 145.53,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 140.41,
+    "end": 141.33,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 145.81,
+    "end": 146.88,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 146.34,
+    "end": 146.86,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 147.01,
+    "end": 154.54,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 153.71,
+    "end": 157.12,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 155.5,
+    "end": 164.17,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 163.52,
+    "end": 166.27,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 166.62,
+    "end": 181.23,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 179.9,
+    "end": 181.86,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 181.86,
+    "end": 191.88,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 190.57,
+    "end": 191.9,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 192.29,
+    "end": 192.71,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 192.32,
+    "end": 207.31,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 205.87,
+    "end": 213.63,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 212.2,
+    "end": 212.52,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 213.89,
+    "end": 224.2,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 220.01,
+    "end": 220.22,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 223.12,
+    "end": 223.44,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 224.74,
+    "end": 228.97,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 225.65,
+    "end": 226.14,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 230.1,
+    "end": 239.42,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 237.43,
+    "end": 238.98,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 240.08,
+    "end": 253.76,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 250.1,
+    "end": 250.12,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 254.44,
+    "end": 256.41,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 255.21,
+    "end": 261.88,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 260.28,
+    "end": 261.53,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 262.18,
+    "end": 269.22,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 268.46,
+    "end": 269.17,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 269.34,
+    "end": 275.77,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 275.25,
+    "end": 276.97,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 276.97,
+    "end": 282.01,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 279.67,
+    "end": 280.58,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 282.6,
+    "end": 283.23,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 284.59,
+    "end": 288.31,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 289.98,
+    "end": 298.41,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 300.0,
+    "end": 306.33,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 306.33,
+    "end": 317.94,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 316.91,
+    "end": 323.88,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 319.49,
+    "end": 319.96,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 324.42,
+    "end": 326.04,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 326.04,
+    "end": 330.81,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 332.57,
+    "end": 333.5,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 335.2,
+    "end": 354.98,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 349.36,
+    "end": 349.39,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 355.47,
+    "end": 372.36,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 370.45,
+    "end": 400.41,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 399.29,
+    "end": 415.14,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 415.73,
+    "end": 416.0,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 416.0,
+    "end": 416.03,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 416.03,
+    "end": 428.03,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 425.87,
+    "end": 427.42,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 428.54,
+    "end": 430.87,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 429.04,
+    "end": 432.0,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 432.0,
+    "end": 432.03,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 432.49,
+    "end": 439.24,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 438.78,
+    "end": 447.22,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 447.22,
+    "end": 447.69,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 447.24,
+    "end": 448.57,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 448.18,
+    "end": 450.24,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 451.4,
+    "end": 485.1,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 486.32,
+    "end": 488.78,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 489.88,
+    "end": 492.66,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 493.68,
+    "end": 497.86,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 493.81,
+    "end": 494.54,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 498.15,
+    "end": 504.63,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 504.12,
+    "end": 506.8,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 506.96,
+    "end": 516.96,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 515.71,
+    "end": 516.83,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 517.15,
+    "end": 531.42,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 529.5,
+    "end": 529.94,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 531.76,
+    "end": 540.66,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 540.66,
+    "end": 540.67,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 540.67,
+    "end": 541.03,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 541.03,
+    "end": 544.01,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 544.35,
+    "end": 550.46,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 548.65,
+    "end": 550.19,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 551.32,
+    "end": 565.98,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 566.79,
+    "end": 568.33,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 566.93,
+    "end": 568.14,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 568.55,
+    "end": 578.67,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 576.03,
+    "end": 577.56,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 578.86,
+    "end": 582.98,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 582.52,
+    "end": 600.26,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 602.35,
+    "end": 605.54,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 602.82,
+    "end": 603.4,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 606.69,
+    "end": 607.83,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 607.83,
+    "end": 612.9,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 608.64,
+    "end": 609.64,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 613.79,
+    "end": 614.53,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 614.65,
+    "end": 616.34,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 615.18,
+    "end": 615.7,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 617.28,
+    "end": 619.39,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 619.02,
+    "end": 621.6,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 620.73,
+    "end": 621.82,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 621.82,
+    "end": 624.57,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 624.03,
+    "end": 624.49,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 625.01,
+    "end": 626.25,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 625.77,
+    "end": 626.26,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 626.26,
+    "end": 627.49,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 627.49,
+    "end": 649.84,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 648.25,
+    "end": 659.56,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 653.84,
+    "end": 654.31,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 656.47,
+    "end": 657.11,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 660.03,
+    "end": 673.41,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 670.8,
+    "end": 672.92,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 673.98,
+    "end": 695.79,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 695.79,
+    "end": 696.5,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 697.47,
+    "end": 697.49,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 697.49,
+    "end": 702.4,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 702.4,
+    "end": 703.74,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 704.31,
+    "end": 708.97,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 704.97,
+    "end": 705.25,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 707.01,
+    "end": 717.96,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 710.27,
+    "end": 710.77,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 718.25,
+    "end": 730.09,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 730.09,
+    "end": 730.16,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 730.16,
+    "end": 732.0,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 730.84,
+    "end": 750.65,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 747.41,
+    "end": 748.2,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 750.78,
+    "end": 763.05,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 753.38,
+    "end": 753.79,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 758.02,
+    "end": 758.19,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 763.39,
+    "end": 773.56,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 764.4,
+    "end": 764.57,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 768.23,
+    "end": 768.79,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 771.02,
+    "end": 771.4,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 773.97,
+    "end": 774.04,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 774.04,
+    "end": 774.21,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 774.21,
+    "end": 774.81,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 774.34,
+    "end": 777.73,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 774.91,
+    "end": 780.36,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 778.69,
+    "end": 780.03,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 781.12,
+    "end": 790.49,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 784.74,
+    "end": 785.06,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 790.89,
+    "end": 793.8,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 793.8,
+    "end": 797.83,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 794.1,
+    "end": 794.96,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 798.17,
+    "end": 809.95,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 800.31,
+    "end": 800.8,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 801.81,
+    "end": 802.81,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 804.14,
+    "end": 804.66,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 807.35,
+    "end": 807.6,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 809.24,
+    "end": 809.68,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 810.15,
+    "end": 812.04,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 810.18,
+    "end": 830.91,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 814.92,
+    "end": 816.16,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 830.92,
+    "end": 830.96,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 830.96,
+    "end": 832.15,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 831.72,
+    "end": 851.54,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 849.64,
+    "end": 850.09,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 851.76,
+    "end": 860.01,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 854.7,
+    "end": 855.61,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 859.64,
+    "end": 861.31,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 860.88,
+    "end": 861.62,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 861.62,
+    "end": 887.72,
+    "speaker": "Người nói 2"
+  },
+  {
+    "start": 861.65,
+    "end": 861.69,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 862.9,
+    "end": 863.27,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 873.8,
+    "end": 874.27,
+    "speaker": "Người nói 1"
+  },
+  {
+    "start": 887.44,
+    "end": 896.62,
+    "speaker": "Người nói 2"
+  }
+]

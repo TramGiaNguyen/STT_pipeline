@@ -804,3 +804,15 @@ body {
 .transcript-area {
     margin-top: 14px;
 }
+
+/* ==================== Biên Bản Họp Tab ==================== */
+.bienban-desc {
+    color: var(--text-secondary);
+    font-size: 0.88rem;
+    line-height: 1.6;
+    margin-bottom: var(--space-md);
+    padding: var(--space-sm) var(--space-md);
+    background: rgba(99, 102, 241, 0.08);
+    border-left: 3px solid var(--color-info);
+    border-radius: 0 var(--border-radius) var(--border-radius) 0;
+}
