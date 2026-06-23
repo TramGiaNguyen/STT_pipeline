@@ -61,9 +61,23 @@ def _run_pyannote_process(audio_path: str, token: str) -> List[Dict]:
     if torch.cuda.is_available():
         pipeline.to(torch.device("cuda"))
 
+    # --- 3b. Hạ clustering threshold cho audio điện thoại ---
+    # Default pyannote 3.1: threshold = 0.7046 (cosine distance).
+    # Với 2 giọng điện thoại qua cùng codec 8kHz, embeddings của 2 người rất
+    # gần nhau → ngưỡng cao sẽ gom cả 2 vào 1 cluster.
+    # Hạ xuống 0.5 → cần khoảng cách < 0.5 mới được xem là cùng người nói.
+    try:
+        pipeline.instantiate({
+            "segmentation": {"min_duration_off": 0.0},
+            "clustering": {"method": "centroid", "min_cluster_size": 12, "threshold": 0.5},
+        })
+        print("[Diarization] Clustering threshold set to 0.5 (default was ~0.705)")
+    except Exception as _e:
+        print(f"[Diarization] Warning: could not set clustering threshold: {_e}")
+
     # --- 4. Chạy Diarization ---
-    # Với audio điện thoại 2 người: cố định min=max=2 để Pyannote không "sáng tạo"
-    # ra speaker thứ 3, thứ 4 không có thật — vốn là nguyên nhân chính gây gộp nhầm
+    # Với audio điện thoại 2 người: cố định min=max=2 để Pyannote tập trung phân biệt
+    # đúng 2 giọng nói thật, không bị phân tán bởi tiếng chuông/tạp âm
     diarization = pipeline(audio_in_memory, min_speakers=2, max_speakers=2)
 
     # --- 5. Chuyển đổi kết quả sang danh sách dict ---
@@ -146,6 +160,14 @@ def _run_pyannote_process(audio_path: str, token: str) -> List[Dict]:
     else:
         consolidated_timeline = [dict(t) for t in timeline]
 
+    # --- Lọc micro-segment (< 0.15s) trước khi merge ---
+    # Các segment cực ngắn thường là noise pyannote và gây ra backchannel giả tạo
+    MIN_SEGMENT_DURATION = 0.15
+    consolidated_timeline = [
+        t for t in consolidated_timeline
+        if (t["end"] - t["start"]) >= MIN_SEGMENT_DURATION
+    ]
+
     # --- Merge các segment liền nhau của cùng 1 speaker ---
     # Điều kiện: cùng speaker + khoảng lặng < 0.4s + tổng độ dài sau merge < 8s
     # Ngưỡng 0.4s: đủ để nối từ bị cắt giữa chừng nhưng không nuốt lượt thoại người khác
@@ -169,6 +191,28 @@ def _run_pyannote_process(audio_path: str, token: str) -> List[Dict]:
                 merged_timeline.append(dict(turn))
 
     timeline = merged_timeline
+
+    # --- Chuẩn hóa nhãn người nói ---
+    # Đảm bảo người nói có nhiều thời lượng nhất trong 10 giây đầu = "Người nói 1"
+    # (thường là nhân viên tổng đài – nói lời chào dài nhất ở đầu cuộc gọi)
+    if len(speaker_map) >= 2:
+        first_10s_dur: Dict[str, float] = {}
+        for turn in timeline:
+            if turn["start"] < 10.0:
+                seg_end = min(turn["end"], 10.0)
+                dur = seg_end - turn["start"]
+                spk = turn["speaker"]
+                first_10s_dur[spk] = first_10s_dur.get(spk, 0.0) + dur
+
+        if first_10s_dur:
+            dominant_spk = max(first_10s_dur, key=first_10s_dur.get)
+            if dominant_spk != "Người nói 1":
+                # Swap: người nói chiếm ưu thế 10s đầu → "Người nói 1"
+                swap_map = {dominant_spk: "Người nói 1", "Người nói 1": dominant_spk}
+                print(f"[Diarization] Label swap: '{dominant_spk}' -> 'Người nói 1' (dominant in first 10s)")
+                for turn in timeline:
+                    if turn["speaker"] in swap_map:
+                        turn["speaker"] = swap_map[turn["speaker"]]
 
     # In kết quả cuối
     final_durations: Dict[str, float] = {}

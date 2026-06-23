@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import tempfile
 
 from server.stt_ws import STTWebSocketHandler
+from src.subtitle_formatter import process_text_glossary
 
 # ThreadPoolExecutor riêng cho file transcription (tránh block event loop)
 _file_transcribe_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="file_transcribe")
@@ -188,7 +189,7 @@ async def transcribe_stream_endpoint(
             input_path=temp_original,
             output_path=temp_enhanced,
             normalize_db=-20.0,
-            apply_denoising=True,
+            apply_denoising=False,   # Tắt: denoiser xoá giọng điện thoại (8kHz codec) của người gọi
             apply_vad_filtering=False # Không được cắt khoảng lặng để tránh lệch timestamp
         )
 
@@ -198,9 +199,11 @@ async def transcribe_stream_endpoint(
         await run_in_threadpool(convert_to_16k_mono, temp_enhanced, temp_converted)
         audio_path = temp_converted
 
-        # 2c. Tạo bản sao mono gốc CHO DIARIZATION (không bị ảnh hưởng bởi lọc nhiễu và resample)
+        # 2c. Tạo bản 16kHz mono NGUYÊN GỐC (không denoised) cho Diarization
+        # Phải resample lên 16kHz: Pyannote train trên 16kHz, nhận 8kHz sẽ thiếu
+        # spectral features → misidentify speaker trong 30s đầu (cold-start problem)
         temp_diarization = temp_original + "_diarize.wav"
-        await run_in_threadpool(convert_to_wav_mono, temp_original, temp_diarization)
+        await run_in_threadpool(convert_to_16k_mono, temp_original, temp_diarization)
 
         logger.info(f"Audio đã sẵn sàng (đã Enhanced & Normalized) để stream: {audio_path}")
         
@@ -247,8 +250,7 @@ async def transcribe_stream_endpoint(
                 
                 def get_speaker_for_segment(start, end, t_line):
                     if not t_line: return None
-                    best_speaker = None
-                    max_overlap = 0
+                    candidates = []
                     
                     # Tìm tất cả các đoạn có giao nhau với [start, end] của từ
                     for turn in t_line:
@@ -256,28 +258,38 @@ async def transcribe_stream_endpoint(
                         overlap_end = min(end, turn["end"])
                         overlap = max(0, overlap_end - overlap_start)
                         
-                        if overlap > max_overlap:
-                            max_overlap = overlap
-                            best_speaker = turn["speaker"]
+                        if overlap > 0:
+                            seg_duration = turn["end"] - turn["start"]
+                            candidates.append({
+                                "speaker": turn["speaker"],
+                                "overlap": overlap,
+                                "seg_duration": seg_duration
+                            })
                             
+                    if candidates:
+                        # Ưu tiên overlap lớn nhất, nếu bằng nhau thì ưu tiên segment NGẮN NHẤT 
+                        # (để bắt được các câu ngắt lời/chuyển thoại thay vì bị đè bởi người nói dài)
+                        candidates.sort(key=lambda x: (-x["overlap"], x["seg_duration"]))
+                        return candidates[0]["speaker"]
+                        
                     # Nếu không có giao thoa nào (từ nằm trong khoảng lặng của Pyannote)
                     # thì dùng khoảng cách gần nhất
-                    if max_overlap == 0:
-                        midpoint = (start + end) / 2.0
-                        min_dist = float('inf')
-                        for turn in t_line:
-                            dist = min(abs(midpoint - turn["start"]), abs(midpoint - turn["end"]))
-                            if dist < min_dist:
-                                min_dist = dist
-                                best_speaker = turn["speaker"]
-                                
+                    midpoint = (start + end) / 2.0
+                    min_dist = float('inf')
+                    best_speaker = "Không rõ"
+                    for turn in t_line:
+                        dist = min(abs(midpoint - turn["start"]), abs(midpoint - turn["end"]))
+                        if dist < min_dist:
+                            min_dist = dist
+                            best_speaker = turn["speaker"]
+                            
                     return best_speaker
                 
                 # 3.2: Chạy transcribe
                 for event_dict in engine.transcribe_stream(
                     audio_path,
                     language=_lang,
-                    beam_size=8,
+                    beam_size=5,
                     condition_on_previous_text=False,
                 ):
                     if event_dict.get("type") == "segment" and diarize == "true":
@@ -286,8 +298,46 @@ async def transcribe_stream_endpoint(
                             # Gán nhãn người nói cho từng chữ
                             for w in words:
                                 w["speaker"] = get_speaker_for_segment(w["start"], w["end"], timeline)
+                            
+                            # === SMOOTHING: Loại bỏ backchannel cắt ngang ===
+                            # CHỈ hấp thụ nếu: đúng 1 từ, thời lượng < 0.8s, 
+                            # VÀ cả trước+sau đều là cùng 1 speaker với run >= 3 từ
+                            speakers = [w.get("speaker", "Không rõ") for w in words]
+                            smoothed = list(speakers)
+                            
+                            i = 0
+                            while i < len(smoothed):
+                                if i > 0 and smoothed[i] != smoothed[i - 1]:
+                                    # Đếm run hiện tại
+                                    run_start = i
+                                    run_speaker = smoothed[i]
+                                    j = i
+                                    while j < len(smoothed) and smoothed[j] == run_speaker:
+                                        j += 1
+                                    run_len = j - run_start
                                     
-                            # 3. Gom các từ theo người nói và yield segment
+                                    # Chỉ smooth nếu: đúng 1 từ, sau nó quay lại speaker trước
+                                    if run_len == 1 and j < len(smoothed) and smoothed[j] == smoothed[i - 1]:
+                                        # Kiểm tra thời lượng từ đó < 0.8s (backchannel thường rất ngắn)
+                                        word_duration = words[i]["end"] - words[i]["start"]
+                                        if word_duration < 0.8:
+                                            # Kiểm tra run trước >= 3 từ (speaker đang nói liên tục)
+                                            prev_run_len = 0
+                                            k = i - 1
+                                            while k >= 0 and smoothed[k] == smoothed[i - 1]:
+                                                prev_run_len += 1
+                                                k -= 1
+                                            if prev_run_len >= 3:
+                                                smoothed[i] = smoothed[i - 1]
+                                                i = j
+                                                continue
+                                i += 1
+                            
+                            # Ghi lại speaker đã smooth vào words
+                            for idx, w in enumerate(words):
+                                w["speaker"] = smoothed[idx]
+                                    
+                            # === GOM CÁC TỪ THEO NGƯỜI NÓI VÀ YIELD SEGMENT ===
                             current_speaker = None
                             current_words = []
                             
@@ -296,13 +346,25 @@ async def transcribe_stream_endpoint(
                                 if current_speaker is None:
                                     current_speaker = spk
                                     
+                                needs_cut = False
                                 if spk != current_speaker:
+                                    needs_cut = True
+                                elif current_words:
+                                    last_w = current_words[-1]
+                                    # Ngắt nếu câu đã dài và kết thúc bằng dấu chấm/hỏi/chấm than
+                                    if len(current_words) > 20 and any(last_w["word"].strip().endswith(p) for p in [".", "?", "!"]):
+                                        needs_cut = True
+                                    # Ngắt nếu khoảng lặng > 1.5s
+                                    elif w["start"] - last_w["end"] > 1.5:
+                                        needs_cut = True
+                                        
+                                if needs_cut:
                                     if current_words:
                                         sub_event = {
                                             "type": "segment",
                                             "start": current_words[0]["start"],
                                             "end": current_words[-1]["end"],
-                                            "text": " ".join([xw["word"] for xw in current_words]).strip(),
+                                            "text": process_text_glossary(" ".join([xw["word"] for xw in current_words]).strip()),
                                             "words": current_words,
                                             "speaker": current_speaker,
                                             "progress": event_dict.get("progress", 0)
@@ -318,7 +380,7 @@ async def transcribe_stream_endpoint(
                                     "type": "segment",
                                     "start": current_words[0]["start"],
                                     "end": current_words[-1]["end"],
-                                    "text": " ".join([xw["word"] for xw in current_words]).strip(),
+                                    "text": process_text_glossary(" ".join([xw["word"] for xw in current_words]).strip()),
                                     "words": current_words,
                                     "speaker": current_speaker,
                                     "progress": event_dict.get("progress", 0)
@@ -410,7 +472,7 @@ async def transcribe_file_endpoint(
             language=language,
             vad_filter=True, # BẬT CHẾ ĐỘ NÀY (BẮT BUỘC KHÁC VỚI MICRO) vì file không đi qua Silero VAD
             temperature=0.0,
-            beam_size=8,
+            beam_size=5,
             condition_on_previous_text=False # Tắt để tránh lỗi hallucination cascading
         )
 
@@ -446,10 +508,10 @@ async def subtitle_export_endpoint(
 
         # 1. Chạy Diarization trước để lấy mốc thời gian của từng người nói
         from src.diarization import DiarizationProcessor
-        from src.audio_utils import convert_to_wav_mono
+        from src.audio_utils import convert_to_16k_mono
         logger.info("[Subtitle Export] Đang convert định dạng và chạy Diarization...")
         temp_diarization = temp_path + "_diarize.wav"
-        await run_in_threadpool(convert_to_wav_mono, temp_path, temp_diarization)
+        await run_in_threadpool(convert_to_16k_mono, temp_path, temp_diarization)
         
         try:
             timeline = await run_in_threadpool(DiarizationProcessor.get_instance().process_audio, temp_diarization)
@@ -469,7 +531,7 @@ async def subtitle_export_endpoint(
             language=language,
             vad_filter=True,
             temperature=0.0,
-            beam_size=8,
+            beam_size=5,
             condition_on_previous_text=False,
             word_timestamps=True
         )
