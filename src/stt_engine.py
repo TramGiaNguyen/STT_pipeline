@@ -56,11 +56,11 @@ class STTEngine:
 
     # Cấu hình VAD mặc định tối ưu cho việc tách câu tiếng Việt tự nhiên trong hội thoại nhanh/ngắn
     DEFAULT_VAD_PARAMETERS = {
-        "threshold": 0.30,                  # Hạ xuống để bắt giọng điện thoại (8kHz codec) — VAD train trên mic chất lượng cao
-        "min_speech_duration_ms": 200,      # Đủ ngắn để bắt "Alo", "Dạ" nhưng không nhặt tiếng click/tạp
-        "max_speech_duration_s": 10,        # Giới hạn 10s — segment ngắn hơn giúp tách speaker chính xác hơn
-        "min_silence_duration_ms": 500,     # Khoảng lặng tối thiểu 500ms để VAD cắt câu nhạy bén hơn
-        "speech_pad_ms": 300                # Padding 300ms quanh đoạn nói để không cắt mất đầu/cuối từ
+        "threshold": 0.5,
+        "min_speech_duration_ms": 250,
+        "max_speech_duration_s": 15,       # Giới hạn phân đoạn tối đa 15s để tránh gom quá dài
+        "min_silence_duration_ms": 600,     # Khoảng lặng tối thiểu 600ms để VAD cắt câu nhạy bén hơn
+        "speech_pad_ms": 400
     }
 
     # Kiểu compute type khả dụng trên CUDA (sắp xếp theo tốc độ từ nhanh đến chậm)
@@ -266,11 +266,7 @@ class STTEngine:
             vad_parameters = self.DEFAULT_VAD_PARAMETERS
 
         if initial_prompt is None:
-            initial_prompt = (
-                "Alo, phòng tuyển sinh trường Đại học Bình Dương xin nghe. "
-                "Mã số sinh viên, tín chỉ, học phí, bảng điểm, học kỳ, "
-                "cố vấn học tập, khiển trách, kỷ luật."
-            )
+            initial_prompt = "Xin chào! Việc này là bắt buộc: viết hoa chữ cái đầu câu, thêm đủ dấu phẩy, dấu chấm. Giữ nguyên thuật ngữ tiếng Anh (RACI, KPI, Microservices, BDU Assistant, STEAM, Dashboard), không phiên âm sang tiếng Việt."
 
         try:
             # Gọi faster-whisper để suy luận
@@ -422,11 +418,7 @@ class STTEngine:
                 vad_filter=True,
                 vad_parameters=vad_parameters,
                 temperature=[0.0, 0.2, 0.4, 0.6], # Fallback tự động khi độ tin cậy thấp
-                initial_prompt=(
-                    "Alo, phòng tuyển sinh trường Đại học Bình Dương xin nghe. "
-                    "Mã số sinh viên, tín chỉ, học phí, bảng điểm, học kỳ, "
-                    "cố vấn học tập, khiển trách, kỷ luật."
-                ),
+                initial_prompt="Xin chào! Việc này là bắt buộc: viết hoa chữ cái đầu câu, thêm đủ dấu phẩy, dấu chấm. Giữ nguyên thuật ngữ tiếng Anh (RACI, KPI, Microservices, BDU Assistant, STEAM, Dashboard), không phiên âm sang tiếng Việt.", # Mồi chuyên ngành và ngữ pháp
                 condition_on_previous_text=condition_on_previous_text,
                 no_speech_threshold=no_speech_threshold,
                 compression_ratio_threshold=compression_ratio_threshold,
@@ -461,12 +453,6 @@ class STTEngine:
 
             for seg in segments_gen:
                 text = seg.text.strip()
-                logger.debug(
-                    f"[Stream][RAW] {seg.start:.1f}s->{seg.end:.1f}s "
-                    f"logprob={getattr(seg,'avg_logprob',0):.3f} "
-                    f"no_sp={getattr(seg,'no_speech_prob',0):.3f} "
-                    f"text='{text[:60]}'"
-                )
                 if not text:
                     continue
 
@@ -474,7 +460,7 @@ class STTEngine:
 
                 # Filter 1: no_speech_prob cao → segment là tiếng ồn, không phải lời nói
                 no_speech_prob = getattr(seg, "no_speech_prob", 0.0)
-                if no_speech_prob > 0.6:
+                if no_speech_prob > 0.4:
                     filtered_count += 1
                     logger.info(
                         f"[Stream] Filter no_speech: prob={no_speech_prob:.3f}, "
@@ -483,9 +469,8 @@ class STTEngine:
                     continue
 
                 # Filter 2: avg_logprob cực thấp → Whisper rất không tự tin
-                # Ngưỡng -1.5: rộng hơn để không bỏ giọng điện thoại kém chất lượng
                 avg_logprob = getattr(seg, "avg_logprob", 0.0)
-                if avg_logprob < -1.5:
+                if avg_logprob < -0.8:
                     filtered_count += 1
                     logger.info(
                         f"[Stream] Filter low confidence: logprob={avg_logprob:.3f}, "

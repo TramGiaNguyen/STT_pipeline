@@ -62,226 +62,6 @@ const STATE = {
     lastDrawTime: 0,               // Thời gian vẽ cuối cùng (cho animation loop)
 };
 
-// ==================== Karaoke Review ====================
-
-const KARAOKE = {
-    audio: null,
-    words: [],        // { el, start, end }[]
-    activeIdx: -1,
-    rafId: null,
-    blobUrl: null,
-    isSeeking: false,
-    lastScrollMs: 0,
-};
-
-function karaokeFormatTime(sec) {
-    if (!sec || isNaN(sec)) return '0:00';
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
-    return `${m}:${String(s).padStart(2, '0')}`;
-}
-
-function karaokeHighlightAt(currentTime) {
-    const words = KARAOKE.words;
-    if (!words.length) return;
-
-    // Binary search: tìm từ cuối cùng có start <= currentTime
-    let lo = 0, hi = words.length - 1, idx = -1;
-    while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (words[mid].start <= currentTime) { idx = mid; lo = mid + 1; }
-        else hi = mid - 1;
-    }
-
-    if (idx === KARAOKE.activeIdx) return;
-
-    const prev = KARAOKE.activeIdx;
-    KARAOKE.activeIdx = idx;
-
-    if (idx > prev) {
-        // Tiến về phía trước: mark prev thành past, kích hoạt idx
-        if (prev >= 0) {
-            words[prev].el.classList.remove('word-active');
-            words[prev].el.classList.add('word-past');
-        }
-        if (idx >= 0) {
-            words[idx].el.classList.remove('word-past');
-            words[idx].el.classList.add('word-active');
-        }
-    } else {
-        // Seek ngược hoặc nhảy: reset toàn bộ
-        words.forEach(w => w.el.classList.remove('word-active', 'word-past'));
-        for (let i = 0; i < idx; i++) words[i].el.classList.add('word-past');
-        if (idx >= 0) words[idx].el.classList.add('word-active');
-    }
-
-    // Auto-scroll (throttle 400ms, chỉ khi từ sắp ra ngoài view)
-    if (idx >= 0) {
-        const now = performance.now();
-        if (now - KARAOKE.lastScrollMs > 400) {
-            const container = document.getElementById('karaoke-text');
-            const el = words[idx].el;
-            if (container && el) {
-                const cr = container.getBoundingClientRect();
-                const er = el.getBoundingClientRect();
-                const relTop = er.top - cr.top;
-                const relBot = er.bottom - cr.top;
-                if (relBot > cr.height * 0.72 || relTop < cr.height * 0.15) {
-                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    KARAOKE.lastScrollMs = now;
-                }
-            }
-        }
-    }
-}
-
-function karaokeRenderLoop() {
-    if (!KARAOKE.audio || KARAOKE.audio.paused) return;
-    karaokeHighlightAt(KARAOKE.audio.currentTime);
-    KARAOKE.rafId = requestAnimationFrame(karaokeRenderLoop);
-}
-
-function buildKaraokeView(segments, file) {
-    const panel     = document.getElementById('karaoke-panel');
-    const textDiv   = document.getElementById('karaoke-text');
-    const audio     = document.getElementById('karaoke-audio');
-    const playBtn   = document.getElementById('karaoke-play-btn');
-    const seekBarEl = document.getElementById('karaoke-seek-bar');
-    const curTimeEl = document.getElementById('karaoke-current-time');
-    const totTimeEl = document.getElementById('karaoke-total-time');
-    const toggleBtn = document.getElementById('karaoke-toggle-view-btn');
-    if (!panel || !textDiv || !audio) return;
-
-    // Dọn dẹp session trước
-    if (KARAOKE.rafId) { cancelAnimationFrame(KARAOKE.rafId); KARAOKE.rafId = null; }
-    if (KARAOKE.audio) KARAOKE.audio.pause();
-    if (KARAOKE.blobUrl) { URL.revokeObjectURL(KARAOKE.blobUrl); KARAOKE.blobUrl = null; }
-    KARAOKE.words = []; KARAOKE.activeIdx = -1; KARAOKE.lastScrollMs = 0; KARAOKE.isSeeking = false;
-
-    // Load audio từ file đã upload
-    KARAOKE.blobUrl = URL.createObjectURL(file);
-    audio.src = KARAOKE.blobUrl;
-    KARAOKE.audio = audio;
-
-    // Xây dựng các word span
-    textDiv.innerHTML = '';
-    const speakerColorMap = {};
-    const colorPalette = ['0', '1', '2', '3'];
-    let colorIdx = 0;
-
-    function speakerColor(spk) {
-        if (!spk) return '0';
-        if (!(spk in speakerColorMap)) speakerColorMap[spk] = colorPalette[colorIdx++ % 4];
-        return speakerColorMap[spk];
-    }
-
-    let curSpeaker = '__init__';
-    let curBlock = null;
-
-    segments.forEach(seg => {
-        const spk = (seg.speaker && seg.speaker !== 'Không rõ') ? seg.speaker : null;
-
-        if (spk !== curSpeaker || !curBlock) {
-            curBlock = document.createElement('div');
-            curBlock.className = 'karaoke-speaker-block';
-            curBlock.dataset.speaker = speakerColor(spk);
-            if (spk) {
-                const lbl = document.createElement('div');
-                lbl.className = 'karaoke-speaker-label';
-                lbl.textContent = spk;
-                curBlock.appendChild(lbl);
-            }
-            textDiv.appendChild(curBlock);
-            curSpeaker = spk;
-        }
-
-        // Dùng word-level nếu có, fallback về segment-level
-        const wordList = (seg.words && seg.words.length > 0) ? seg.words
-            : [{ word: seg.text?.trim() || '', start: seg.start, end: seg.end }];
-
-        wordList.forEach(w => {
-            if (!w.word) return;
-            const span = document.createElement('span');
-            span.className = 'word';
-            span.textContent = w.word.trim();
-            const wStart = parseFloat(w.start);
-            const wEnd   = parseFloat(w.end);
-            span.addEventListener('click', () => {
-                audio.currentTime = wStart;
-                karaokeHighlightAt(wStart);
-            });
-            curBlock.appendChild(span);
-            curBlock.appendChild(document.createTextNode(' '));
-            KARAOKE.words.push({ el: span, start: wStart, end: wEnd });
-        });
-    });
-
-    // Audio events
-    audio.onloadedmetadata = () => {
-        if (seekBarEl) seekBarEl.max = audio.duration;
-        if (totTimeEl) totTimeEl.textContent = karaokeFormatTime(audio.duration);
-    };
-    audio.ontimeupdate = () => {
-        if (KARAOKE.isSeeking) return;
-        if (seekBarEl) seekBarEl.value = audio.currentTime;
-        if (curTimeEl) curTimeEl.textContent = karaokeFormatTime(audio.currentTime);
-    };
-    audio.onplay = () => {
-        if (playBtn) playBtn.innerHTML = '⏸ Dừng';
-        KARAOKE.rafId = requestAnimationFrame(karaokeRenderLoop);
-    };
-    audio.onpause = audio.onended = () => {
-        if (playBtn) playBtn.innerHTML = '▶ Phát';
-        if (KARAOKE.rafId) { cancelAnimationFrame(KARAOKE.rafId); KARAOKE.rafId = null; }
-    };
-
-    // Nút Play/Pause
-    if (playBtn) {
-        playBtn.innerHTML = '▶ Phát';
-        playBtn.onclick = () => {
-            if (audio.paused) audio.play().catch(e => log(`Lỗi phát audio: ${e}`, 'error'));
-            else audio.pause();
-        };
-    }
-
-    // Seek bar
-    if (seekBarEl) {
-        seekBarEl.value = 0;
-        seekBarEl.oninput = () => {
-            KARAOKE.isSeeking = true;
-            if (curTimeEl) curTimeEl.textContent = karaokeFormatTime(parseFloat(seekBarEl.value));
-        };
-        seekBarEl.onchange = () => {
-            const t = parseFloat(seekBarEl.value);
-            audio.currentTime = t;
-            KARAOKE.isSeeking = false;
-            karaokeHighlightAt(t);
-        };
-    }
-
-    // Toggle sang text view
-    if (toggleBtn) {
-        toggleBtn.onclick = () => {
-            panel.style.display = 'none';
-            const ta = document.getElementById('transcript-area');
-            if (ta) ta.style.display = 'block';
-            const reviewBtn = document.getElementById('btn-karaoke-review');
-            if (reviewBtn) reviewBtn.style.display = 'inline-flex';
-            if (!audio.paused) audio.pause();
-        };
-    }
-
-    // Hiện panel, ẩn textarea
-    panel.style.display = 'block';
-    const ta = document.getElementById('transcript-area');
-    if (ta) ta.style.display = 'none';
-    const reviewBtn = document.getElementById('btn-karaoke-review');
-    if (reviewBtn) reviewBtn.style.display = 'none';
-
-    // Scroll karaoke text về đầu
-    textDiv.scrollTop = 0;
-}
-
 // ==================== Utility Functions ====================
 
 /**
@@ -1443,11 +1223,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
                 if (btnClearTranscript) btnClearTranscript.style.display = "inline-flex";
 
-                // Mở karaoke review sau khi STT hoàn tất
-                if (window.currentSegments.length > 0) {
-                    buildKaraokeView(window.currentSegments, file);
-                }
-
             } catch (err) {
                 if (!aborted) {
                     log(`Lỗi stream STT: ${err.message}`, "error");
@@ -1531,31 +1306,14 @@ document.addEventListener("DOMContentLoaded", () => {
     // ===== Nút Xóa transcript =====
     if (btnClearTranscript) {
         btnClearTranscript.addEventListener("click", () => {
-            if (transcriptArea) { transcriptArea.value = ""; transcriptArea.style.display = "block"; }
+            if (transcriptArea) transcriptArea.value = "";
             if (btnDownload)    btnDownload.disabled = true;
             if (transcriptStats) transcriptStats.textContent = "";
             if (progressContainer) progressContainer.style.display = "none";
             fileStatusText.textContent = "Chọn file audio/video để tải lên";
             fileStatusText.className   = "status-text status-ready";
             btnClearTranscript.style.display = "none";
-            // Ẩn karaoke panel và dừng audio
-            const karaokePanel = document.getElementById('karaoke-panel');
-            if (karaokePanel) karaokePanel.style.display = 'none';
-            if (KARAOKE.audio && !KARAOKE.audio.paused) KARAOKE.audio.pause();
-            const btnKaraokeReview2 = document.getElementById('btn-karaoke-review');
-            if (btnKaraokeReview2) btnKaraokeReview2.style.display = 'none';
             log("Đã xóa transcript", "info");
-        });
-    }
-
-    // Nút quay lại karaoke view từ text view
-    const btnKaraokeReview = document.getElementById('btn-karaoke-review');
-    if (btnKaraokeReview) {
-        btnKaraokeReview.addEventListener('click', () => {
-            const panel = document.getElementById('karaoke-panel');
-            if (panel) panel.style.display = 'block';
-            if (transcriptArea) transcriptArea.style.display = 'none';
-            btnKaraokeReview.style.display = 'none';
         });
     }
 

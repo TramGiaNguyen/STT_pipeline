@@ -164,29 +164,6 @@
                 placeholder="Nội dung phiên âm sẽ xuất hiện tại đây theo từng đoạn khi mô hình xử lý xong...&#10;&#10;Hỗ trợ file từ 4 phút đến ~3 tiếng."
                 aria-label="Nội dung phiên âm"></textarea>
 
-            <!-- Karaoke review panel (hiện sau khi STT xong) -->
-            <div id="karaoke-panel" style="display:none;">
-                <audio id="karaoke-audio" preload="auto"></audio>
-                <div class="karaoke-controls">
-                    <button id="karaoke-play-btn" class="btn btn-start"
-                        style="min-width:80px; height:36px; font-size:0.85rem; padding:0 14px;">
-                        ▶ Phát
-                    </button>
-                    <div class="karaoke-time-display">
-                        <span id="karaoke-current-time">0:00</span>
-                        <span style="color:var(--text-muted);"> / </span>
-                        <span id="karaoke-total-time">0:00</span>
-                    </div>
-                    <input type="range" id="karaoke-seek-bar" class="karaoke-seek-bar"
-                        min="0" max="100" step="0.01" value="0">
-                    <button id="karaoke-toggle-view-btn" class="btn btn-secondary btn-sm"
-                        title="Chuyển sang xem văn bản thuần để copy">
-                        📄 Văn bản
-                    </button>
-                </div>
-                <div id="karaoke-text" class="karaoke-text"></div>
-            </div>
-
             <!-- Nút download -->
             <div class="file-action-row" style="margin-top:12px;">
                 <button id="btn-download-transcript" class="btn btn-download" disabled>
@@ -209,10 +186,6 @@
                     Tải về phụ đề .srt
                 </button>
                 <span id="transcript-stats" class="transcript-stats"></span>
-                <button id="btn-karaoke-review" class="btn btn-secondary btn-sm" style="display:none;"
-                    title="Mở lại chế độ highlight theo audio">
-                    ▶ Xem highlight
-                </button>
             </div>
         </section>
 

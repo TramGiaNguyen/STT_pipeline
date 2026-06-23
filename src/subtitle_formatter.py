@@ -16,8 +16,8 @@ def format_time_srt(seconds: float) -> str:
 
 def process_text_glossary(text: str) -> str:
     """Lọc hậu kỳ: thay đổi thuật ngữ bị phiên âm sai bằng từ chuẩn"""
-    # === Glossary chuyên ngành (thuật ngữ tiếng Anh) ===
-    tech_replacements = [
+    # Mặc dù prompt đã ép model, dùng thêm hậu kỳ bằng regex luôn chắc cú.
+    replacements = [
         (r'(?i)\b(bi đi u|pi đi u)\s*(a sít từn|assistant)?\b', 'BDU Assistant'),
         (r'(?i)\b(ai đi ti ai)\b', 'IDTI'),
         (r'(?i)\b(cây|kê|ki)\s*pi\s*ai\b', 'KPI'),
@@ -27,54 +27,12 @@ def process_text_glossary(text: str) -> str:
         (r'(?i)\b(rây|rê)\s*(si|xi)\s*(ai|i)?\b', 'RACI'),
         (r'(?i)\bsờ tim(\s*ây\s*ai)?\b', 'STEAM AI'),
     ]
-    
-    # === Glossary tiếng Việt (từ hay bị nghe sai trong cuộc gọi điện thoại) ===
-    vn_replacements = [
-        # Học thuật
-        (r'(?i)\btiếng chỉ\b', 'tín chỉ'),
-        (r'(?i)\btiếng chữ\b', 'tín chỉ'),
-        (r'(?i)\btính chỉ\b', 'tín chỉ'),
-        (r'(?i)\btính chữ\b', 'tín chỉ'),
-        (r'(?i)\bchín chỉ\b', 'tín chỉ'),
-        (r'(?i)\btrứng chịu\b', 'tín chỉ'),
-        (r'(?i)\bthính chỉ\b', 'tín chỉ'),
-        (r'(?i)\bthính vị\b', 'tín chỉ'),
-        # Zalo / liên lạc
-        (r'(?i)\bnha lô\b', 'Zalo'),
-        (r'(?i)\byao lôi\b', 'Zalo'),
-        (r'(?i)\byao lô\b', 'Zalo'),
-        (r'(?i)\bgia lô\b', 'Zalo'),
-        (r'(?i)\bnhắn lô\b', 'Zalo'),
-        (r'(?i)\bcác bạn zalo\b', 'kết bạn Zalo'),
-        (r'(?i)\bcác bạn nghe lôi\b', 'kết bạn Zalo'),
-        (r'(?i)\bkết bạn gia lô\b', 'kết bạn Zalo'),
-        # Email / mạng xã hội
-        (r'(?i)\bmeo\b', 'mail'),
-        (r'(?i)\bphây\b', 'Facebook'),
-        (r'(?i)\btrang phây\b', 'trang Facebook'),
-        (r'(?i)\btrang face\b', 'trang Facebook'),
-        # Tên riêng thường bị sai
-        (r'(?i)\bviệt tinh\b', 'Viettin'),
-        (r'(?i)\bviệc tinh\b', 'Viettin'),
-        # Từ bị nghe sai phổ biến
-        (r'(?i)\bsút sai\b', 'xuất file'),
-        (r'(?i)\blịch hội\b', 'mật khẩu'),
-        (r'(?i)\bnhẫn huyết\b', 'nhắn miết'),
-        (r'(?i)\btrang goét\b', 'trang web'),
-        (r'(?i)\bon lai\b', 'online'),
-        (r'(?i)\bcân bằng hai\b', 'văn bằng hai'),
-        (r'(?i)\bhoa băng\b', 'Habana'),
-        (r'(?i)\bbốc\s+phót\b', 'bóc phốt'),
-        (r'(?i)\bbốc\s+phốt\b', 'bóc phốt'),
-        (r'(?i)\brất môn\b', 'rớt môn'),
-        (r'(?i)\bhổ\s+chợ\b', 'hỗ trợ'),
-        (r'(?i)\bhỗ\s+chợ\b', 'hỗ trợ'),
-        (r'(?i)\bnạo\s+môn\b', 'nợ môn'),
-        (r'(?i)\bnạo\s+quá\b', 'nợ quá'),
-    ]
-    
-    for pattern, replacement in tech_replacements + vn_replacements:
+    for pattern, replacement in replacements:
         text = re.sub(pattern, replacement, text)
+    
+    # Loại bỏ một số từ thừa vô nghĩa (tùy chọn)
+    # text = re.sub(r'(?i)\b(ờm|ờ|ừm)\b', '', text)
+    # text = re.sub(r'\s+', ' ', text).strip()
     
     return text
 
@@ -83,26 +41,22 @@ def get_speaker_for_word(word_start: float, word_end: float, diarization: List[D
     if not diarization:
         return "Unknown"
         
-    candidates = []
+    best_speaker = "Unknown"
+    max_overlap = 0.0
+    
+    # Tinh chỉnh: chọn khoảng loa đè thời gian lớn nhất với từ
     for seg in diarization:
+        # Tính overlap
         o_start = max(word_start, seg["start"])
         o_end = min(word_end, seg["end"])
         overlap = max(0.0, o_end - o_start)
-        if overlap > 0:
-            seg_duration = seg["end"] - seg["start"]
-            candidates.append({
-                "speaker": seg["speaker"],
-                "overlap": overlap,
-                "seg_duration": seg_duration
-            })
+        
+        if overlap > max_overlap:
+            max_overlap = overlap
+            best_speaker = seg["speaker"]
             
-    if candidates:
-        # Ưu tiên overlap lớn nhất, nếu bằng nhau thì ưu tiên segment NGẮN NHẤT 
-        # (để bắt được các câu ngắt lời/chuyển thoại thay vì bị đè bởi người nói dài)
-        candidates.sort(key=lambda x: (-x["overlap"], x["seg_duration"]))
-        best_speaker = candidates[0]["speaker"]
-    else:
-        # Nếu không có overlap, tìm segment gần nhất
+    # Nếu overlap 0, tìm cái có khoảng cách nhỏ nhất
+    if max_overlap == 0:
         closest_seg = min(diarization, key=lambda s: min(abs(word_start - s["end"]), abs(word_end - s["start"])))
         best_speaker = closest_seg["speaker"]
         
@@ -130,39 +84,6 @@ def generate_srt(segments: List[Dict], diarization: List[Dict] = None, max_words
     if diarization:
         for w in all_words:
             w["speaker"] = get_speaker_for_word(w["start"], w["end"], diarization)
-        
-        # === SMOOTHING: Loại bỏ backchannel cắt ngang ===
-        # CHỈ hấp thụ nếu: đúng 1 từ, thời lượng < 0.8s,
-        # VÀ cả trước+sau đều là cùng 1 speaker với run >= 3 từ
-        speakers = [w.get("speaker", "Không rõ") for w in all_words]
-        smoothed = list(speakers)
-        
-        i = 0
-        while i < len(smoothed):
-            if i > 0 and smoothed[i] != smoothed[i - 1]:
-                run_start = i
-                run_speaker = smoothed[i]
-                j = i
-                while j < len(smoothed) and smoothed[j] == run_speaker:
-                    j += 1
-                run_len = j - run_start
-                
-                if run_len == 1 and j < len(smoothed) and smoothed[j] == smoothed[i - 1]:
-                    word_duration = all_words[i]["end"] - all_words[i]["start"]
-                    if word_duration < 0.8:
-                        prev_run_len = 0
-                        k = i - 1
-                        while k >= 0 and smoothed[k] == smoothed[i - 1]:
-                            prev_run_len += 1
-                            k -= 1
-                        if prev_run_len >= 3:
-                            smoothed[i] = smoothed[i - 1]
-                            i = j
-                            continue
-            i += 1
-        
-        for idx, w in enumerate(all_words):
-            w["speaker"] = smoothed[idx]
 
     # 2. Xây dựng các khối phụ đề (Subtitle Blocks)
     blocks = []
