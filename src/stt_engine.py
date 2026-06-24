@@ -15,6 +15,7 @@ Các chức năng chính:
 """
 
 import os
+import re
 import logging
 from pathlib import Path
 from typing import Optional, Union, List
@@ -25,6 +26,68 @@ from faster_whisper import WhisperModel
 from faster_whisper.utils import download_model as download_faster_whisper_model
 
 logger = logging.getLogger(__name__)
+
+
+# Prompt mồi cho cuộc gọi điện thoại tiếng Việt (call center Đại học Bình Dương).
+# QUAN TRỌNG: prompt phải ĐÚNG NGỮ CẢNH với audio. Prompt cũ mồi thuật ngữ họp hành
+# (RACI, KPI, Microservices, Dashboard) hoàn toàn lạc đề với cuộc gọi tư vấn tuyển sinh,
+# khiến model bối rối ngay từ segment đầu (sai chính tả + bỏ sót đầu file).
+# Liệt kê đúng chính tả vài từ khoá hay bị nghe nhầm (tín chỉ, văn bằng, học kỳ...) để mồi model.
+PHONE_CALL_PROMPT = (
+    "Đây là đoạn ghi âm cuộc gọi điện thoại tư vấn của trường Đại học Bình Dương, "
+    "nội dung về tuyển sinh, học phí, học kỳ, tín chỉ, văn bằng hai, đăng ký môn học, "
+    "sinh viên, online. Hãy ghi lại đúng chính tả tiếng Việt, viết hoa đầu câu và thêm "
+    "dấu phẩy, dấu chấm đầy đủ."
+)
+
+
+def clean_model_artifacts(text: str) -> str:
+    """
+    Loại bỏ token rác do model rò rỉ ở ranh giới segment.
+
+    Trên audio điện thoại 8kHz, EraX hay phát token <unk> (decode thành "unk")
+    ở đầu các đoạn ngay sau khoảng lặng. "unk" không phải âm tiết tiếng Việt nên
+    có thể xoá an toàn theo ranh giới từ.
+    """
+    if not text:
+        return text
+    # Dạng có ngoặc: <unk>, <|unk|>
+    text = re.sub(r"(?i)<\|?\s*unk\s*\|?>", " ", text)
+    # Dạng trần: từ "unk" đứng riêng
+    text = re.sub(r"(?i)\bunk\b", " ", text)
+    # Gom khoảng trắng thừa và dấu câu lẻ đầu chuỗi
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"^[.,;:?!]+\s*", "", text)
+    return text
+
+
+def _max_immediate_repeat(tokens: List[str], n: int) -> int:
+    """
+    Đếm số lần một n-gram lặp LIÊN TIẾP (back-to-back) tối đa trong chuỗi token.
+
+    Dùng để phân biệt VÒNG LẶP ẢO GIÁC THẬT của Whisper
+    (vd "vùng cho vùng cho vùng cho vùng cho ...") với SỰ LẶP TỰ NHIÊN
+    trong hội thoại tiếng Việt (vd "học kỳ hai" được nhắc rải rác nhiều lần,
+    hay "dạ dạ", "không không") — thứ KHÔNG nên bị xoá.
+
+    Chỉ đếm khi n-gram đứng kề nhau (i, i+n, i+2n...), nên "học kỳ hai ... học kỳ hai"
+    nằm cách xa nhau sẽ KHÔNG bị tính là lặp.
+    """
+    if len(tokens) < 2 * n:
+        return 1
+    best = 1
+    i = 0
+    while i + n <= len(tokens):
+        gram = tokens[i:i + n]
+        reps = 1
+        j = i + n
+        while j + n <= len(tokens) and tokens[j:j + n] == gram:
+            reps += 1
+            j += n
+        best = max(best, reps)
+        # Nhảy qua cả chuỗi lặp đã duyệt để không đếm trùng
+        i = j if reps > 1 else i + 1
+    return best
 
 
 class STTEngine:
@@ -61,6 +124,22 @@ class STTEngine:
         "max_speech_duration_s": 15,       # Giới hạn phân đoạn tối đa 15s để tránh gom quá dài
         "min_silence_duration_ms": 600,     # Khoảng lặng tối thiểu 600ms để VAD cắt câu nhạy bén hơn
         "speech_pad_ms": 400
+    }
+
+    # Cấu hình VAD cho audio ĐIỆN THOẠI 8kHz (cuộc gọi 2 người).
+    # Khác DEFAULT ở 3 điểm để khắc phục: (1) bỏ sót giọng đầu/giữa file,
+    # (2) gộp nhầm 2 người nói vào một đoạn.
+    #   - threshold 0.3  : giọng điện thoại 8kHz năng lượng thấp, ngưỡng 0.5 dễ bỏ sót
+    #                      câu nói nhỏ ở đầu/giữa file. Hạ xuống 0.3 (không xuống quá thấp
+    #                      để tránh lọt nhiễu/đoạn im lặng dài gây ảo giác).
+    #   - min_silence 350: cắt theo lượt thoại nhạy hơn → mỗi đoạn ít khi chứa cả 2 người.
+    #   - speech_pad 200 : giảm phần đệm để bớt "dính" tiếng người nói kế bên (giảm gộp nhầm).
+    STREAM_VAD_PARAMETERS = {
+        "threshold": 0.3,
+        "min_speech_duration_ms": 200,
+        "max_speech_duration_s": 15,
+        "min_silence_duration_ms": 350,
+        "speech_pad_ms": 200,
     }
 
     # Kiểu compute type khả dụng trên CUDA (sắp xếp theo tốc độ từ nhanh đến chậm)
@@ -266,7 +345,7 @@ class STTEngine:
             vad_parameters = self.DEFAULT_VAD_PARAMETERS
 
         if initial_prompt is None:
-            initial_prompt = "Xin chào! Việc này là bắt buộc: viết hoa chữ cái đầu câu, thêm đủ dấu phẩy, dấu chấm. Giữ nguyên thuật ngữ tiếng Anh (RACI, KPI, Microservices, BDU Assistant, STEAM, Dashboard), không phiên âm sang tiếng Việt."
+            initial_prompt = PHONE_CALL_PROMPT
 
         try:
             # Gọi faster-whisper để suy luận
@@ -363,8 +442,8 @@ class STTEngine:
         language: Optional[str] = None,
         beam_size: int = 8,
         condition_on_previous_text: bool = False,
-        no_speech_threshold: float = 0.35,
-        compression_ratio_threshold: float = 1.8,
+        no_speech_threshold: float = 0.6,
+        compression_ratio_threshold: float = 2.4,
         vad_parameters: Optional[dict] = None,
     ):
         """
@@ -407,7 +486,8 @@ class STTEngine:
         logger.info(f"[Stream] Bắt đầu transcribe_stream: {audio_label}, ngôn ngữ: {language or 'tự động'}")
 
         if vad_parameters is None:
-            vad_parameters = self.DEFAULT_VAD_PARAMETERS
+            # Dùng cấu hình VAD tối ưu cho audio điện thoại 8kHz (ngưỡng thấp, ít gộp nhầm)
+            vad_parameters = self.STREAM_VAD_PARAMETERS
 
         try:
             segments_gen, info = self.model.transcribe(
@@ -418,7 +498,7 @@ class STTEngine:
                 vad_filter=True,
                 vad_parameters=vad_parameters,
                 temperature=[0.0, 0.2, 0.4, 0.6], # Fallback tự động khi độ tin cậy thấp
-                initial_prompt="Xin chào! Việc này là bắt buộc: viết hoa chữ cái đầu câu, thêm đủ dấu phẩy, dấu chấm. Giữ nguyên thuật ngữ tiếng Anh (RACI, KPI, Microservices, BDU Assistant, STEAM, Dashboard), không phiên âm sang tiếng Việt.", # Mồi chuyên ngành và ngữ pháp
+                initial_prompt=PHONE_CALL_PROMPT, # Mồi đúng ngữ cảnh cuộc gọi điện thoại tiếng Việt
                 condition_on_previous_text=condition_on_previous_text,
                 no_speech_threshold=no_speech_threshold,
                 compression_ratio_threshold=compression_ratio_threshold,
@@ -452,15 +532,19 @@ class STTEngine:
             ]
 
             for seg in segments_gen:
-                text = seg.text.strip()
+                # Xoá token rác <unk> rò rỉ ở đầu segment trước khi lọc
+                text = clean_model_artifacts(seg.text.strip())
                 if not text:
                     continue
 
                 # === BỘ LỌC HALLUCINATION (tương tự stt_ws.py) ===
+                # LƯU Ý: audio điện thoại 8kHz có confidence thấp tự nhiên, ngưỡng lọc
+                # quá gắt sẽ cắt mất giọng thật (đầu file + các câu giữa file). Đã nới ngưỡng.
 
-                # Filter 1: no_speech_prob cao → segment là tiếng ồn, không phải lời nói
+                # Filter 1: no_speech_prob rất cao → segment là tiếng ồn, không phải lời nói.
+                # Nới 0.4 → 0.6 (khớp no_speech_threshold của Whisper) để không cắt oan giọng điện thoại.
                 no_speech_prob = getattr(seg, "no_speech_prob", 0.0)
-                if no_speech_prob > 0.4:
+                if no_speech_prob > 0.6:
                     filtered_count += 1
                     logger.info(
                         f"[Stream] Filter no_speech: prob={no_speech_prob:.3f}, "
@@ -468,9 +552,10 @@ class STTEngine:
                     )
                     continue
 
-                # Filter 2: avg_logprob cực thấp → Whisper rất không tự tin
+                # Filter 2: avg_logprob cực thấp → Whisper rất không tự tin.
+                # Nới -0.8 → -1.1 vì giọng điện thoại / tiếng địa phương vốn cho logprob thấp.
                 avg_logprob = getattr(seg, "avg_logprob", 0.0)
-                if avg_logprob < -0.8:
+                if avg_logprob < -1.1:
                     filtered_count += 1
                     logger.info(
                         f"[Stream] Filter low confidence: logprob={avg_logprob:.3f}, "
@@ -498,31 +583,34 @@ class STTEngine:
                         )
                         continue
 
-                # Filter 5: Lặp từ (hallucination loop)
+                # Filter 5: Vòng lặp ảo giác (hallucination loop)
+                # LƯU Ý QUAN TRỌNG: hội thoại tiếng Việt lặp từ/cụm rất nhiều một cách
+                # TỰ NHIÊN ("học kỳ hai" nhắc đi nhắc lại, "dạ dạ", "không không có",
+                # "mà không có"...). Bộ lọc cũ (unique_ratio<0.4 và đếm cụm 3 từ xuất hiện
+                # >3 lần BẤT KỲ ĐÂU) bắt nhầm các câu này → XOÁ NGUYÊN ĐOẠN hội thoại thật
+                # (đã đo: mất ~1 phút nội dung "học kỳ 2" trên 4.wav). Chỉ xoá khi là vòng
+                # lặp THẬT: một từ/cụm lặp LIÊN TIẾP nhiều lần, hoặc gần như không có từ mới.
                 seg_words = text.split()
-                if len(seg_words) > 5:
+                if len(seg_words) > 8:
                     unique_ratio = len(set(seg_words)) / len(seg_words)
-                    if unique_ratio < 0.4:
+                    # 1 từ lặp >=7 lần liền nhau, hoặc 1 cụm 2 từ lặp >=4 lần, hoặc 1 cụm
+                    # 3 từ lặp >=3 lần liền nhau → gần như chắc chắn là Whisper bị kẹt vòng lặp.
+                    # (Ngưỡng 1-từ để ở 7 vì người nói nhanh hay lắp từ chức năng "chị/dạ/à/không"
+                    #  5-6 lần liền — vòng lặp ảo giác thật thường dài hơn nhiều và đã bị bắt bởi
+                    #  điều kiện unique_ratio < 0.25 bên dưới.)
+                    looped = (
+                        _max_immediate_repeat(seg_words, 1) >= 7
+                        or _max_immediate_repeat(seg_words, 2) >= 4
+                        or _max_immediate_repeat(seg_words, 3) >= 3
+                    )
+                    # Đoạn dài mà gần như không có từ mới (vd "vùng cho vùng cho nóng...")
+                    degenerate = unique_ratio < 0.25
+                    if looped or degenerate:
                         filtered_count += 1
                         logger.warning(
-                            f"[Stream] Filter repeat ({unique_ratio:.0%} unique): "
-                            f"'{text[:60]}'"
+                            f"[Stream] Filter loop ({unique_ratio:.0%} unique, "
+                            f"looped={looped}): '{text[:60]}'"
                         )
-                        continue
-
-                    # Kiểm tra cụm từ lặp liên tiếp
-                    is_phrase_repeat = False
-                    for i in range(len(seg_words) - 2):
-                        phrase = " ".join(seg_words[i:i+3])
-                        if text.count(phrase) > 3:
-                            is_phrase_repeat = True
-                            logger.warning(
-                                f"[Stream] Filter phrase repeat '{phrase}': "
-                                f"'{text[:60]}'"
-                            )
-                            break
-                    if is_phrase_repeat:
-                        filtered_count += 1
                         continue
 
                 # Filter 6: Text quá ngắn (1-2 ký tự) — thường là hallucination
@@ -536,8 +624,12 @@ class STTEngine:
                 words = []
                 if hasattr(seg, "words") and seg.words:
                     for w in seg.words:
+                        clean_word = w.word.lstrip()
+                        # Bỏ qua token rác <unk>/"unk" ở cấp từ (SRT dựng từ word phải sạch)
+                        if clean_word.strip().lower() in ("unk", "<unk>", "<|unk|>"):
+                            continue
                         words.append({
-                            "word": w.word.lstrip(),
+                            "word": clean_word,
                             "start": round(w.start, 2),
                             "end": round(w.end, 2),
                             "probability": round(w.probability, 2)

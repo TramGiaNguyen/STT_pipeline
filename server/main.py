@@ -23,6 +23,63 @@ from server.stt_ws import STTWebSocketHandler
 # ThreadPoolExecutor riêng cho file transcription (tránh block event loop)
 _file_transcribe_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="file_transcribe")
 
+
+def _smooth_word_speakers(words):
+    """
+    Khử các 'đảo' speaker quá ngắn do timestamp cấp-từ trên audio 8kHz bị lệch.
+    Một chữ lẻ hay bị gán nhầm sang người nói khác, băm vụn câu của CÙNG một người
+    (vd "nhưng người [ta] bị ảnh hưởng" bị tách chữ 'ta' cho người khác → 3 mảnh rời).
+
+    Quy tắc: một đoạn liên tiếp cùng speaker bị coi là 'yếu' nếu chỉ 1 chữ, hoặc 2 chữ mà
+    kéo dài < 0.7s → gán lại theo người nói HÀNG XÓM DÀI HƠN, lặp đến khi ổn định. Nhờ vậy
+    các mảnh của cùng một người nối liền lại, giảm băm vụn mà không nuốt lượt thoại thật.
+    Sửa tại chỗ (in-place) danh sách words và trả về chính nó.
+    """
+    n = len(words)
+    if n < 3:
+        return words
+    spks = [w.get("speaker") for w in words]
+
+    def is_weak(s, e):
+        wc = e - s
+        dur = words[e - 1]["end"] - words[s]["start"]
+        return wc <= 1 or (wc <= 2 and dur < 0.7)
+
+    while True:
+        # Dựng các đoạn (run) liên tiếp cùng speaker
+        runs = []
+        i = 0
+        while i < n:
+            j = i
+            while j < n and spks[j] == spks[i]:
+                j += 1
+            runs.append((i, j))
+            i = j
+        if len(runs) < 2:
+            break
+        # Tìm đoạn 'yếu' nhỏ nhất để gộp vào hàng xóm
+        weak_idx = -1
+        for idx, (s, e) in enumerate(runs):
+            if is_weak(s, e) and (weak_idx == -1 or (e - s) < (runs[weak_idx][1] - runs[weak_idx][0])):
+                weak_idx = idx
+        if weak_idx == -1:
+            break
+        s, e = runs[weak_idx]
+        left = runs[weak_idx - 1] if weak_idx > 0 else None
+        right = runs[weak_idx + 1] if weak_idx + 1 < len(runs) else None
+        if left and right:
+            target = spks[left[0]] if (left[1] - left[0]) >= (right[1] - right[0]) else spks[right[0]]
+        elif left:
+            target = spks[left[0]]
+        else:
+            target = spks[right[0]]
+        for k in range(s, e):
+            spks[k] = target
+
+    for k in range(n):
+        words[k]["speaker"] = spks[k]
+    return words
+
 # Cấu hình logging
 logging.basicConfig(
     level=logging.INFO,
@@ -148,6 +205,7 @@ async def transcribe_stream_endpoint(
     file: UploadFile = File(...),
     language: str = Form("vi"),
     diarize: str = Form("false"),
+    diarize_mode: str = Form("phone"),  # "phone" (cuộc gọi 2 người) | "meeting" (họp nhiều người)
 ):
     """
     Streaming STT endpoint qua Server-Sent Events (SSE).
@@ -234,7 +292,10 @@ async def transcribe_stream_endpoint(
                     )
                     from src.diarization import DiarizationProcessor
                     # Chạy process offline blocking function trong cái executor thread này luôn
-                    timeline = DiarizationProcessor.get_instance().process_audio(temp_diarization)
+                    # mode: "phone" (cuộc gọi 2 người) | "meeting" (họp nhiều người) — do client chọn
+                    timeline = DiarizationProcessor.get_instance().process_audio(
+                        temp_diarization, mode=diarize_mode
+                    )
                     
                     # --- DEBUG DUMP ---
                     try:
@@ -286,7 +347,10 @@ async def transcribe_stream_endpoint(
                             # Gán nhãn người nói cho từng chữ
                             for w in words:
                                 w["speaker"] = get_speaker_for_segment(w["start"], w["end"], timeline)
-                                    
+
+                            # Làm mượt: gộp các đảo speaker 1 chữ bị gán nhầm để hết băm vụn câu
+                            _smooth_word_speakers(words)
+
                             # 3. Gom các từ theo người nói và yield segment
                             current_speaker = None
                             current_words = []
@@ -428,7 +492,8 @@ async def transcribe_file_endpoint(
 @app.post("/api/stt/subtitle_export")
 async def subtitle_export_endpoint(
     file: UploadFile = File(...),
-    language: str = Form("vi")
+    language: str = Form("vi"),
+    diarize_mode: str = Form("phone"),  # "phone" (cuộc gọi 2 người) | "meeting" (họp nhiều người)
 ):
     """
     API Upload âm thanh và trả về trực tiếp file phụ đề (.srt)
@@ -452,7 +517,10 @@ async def subtitle_export_endpoint(
         await run_in_threadpool(convert_to_wav_mono, temp_path, temp_diarization)
         
         try:
-            timeline = await run_in_threadpool(DiarizationProcessor.get_instance().process_audio, temp_diarization)
+            timeline = await run_in_threadpool(
+                DiarizationProcessor.get_instance().process_audio,
+                temp_diarization, 600, diarize_mode
+            )
         finally:
             if os.path.exists(temp_diarization):
                 try:

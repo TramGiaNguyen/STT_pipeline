@@ -149,6 +149,22 @@
                     <span style="margin-left: 6px; color: #94a3b8; font-size: 13px;">- Nhận dạng ai đang nói (tốn nhiều
                         phần cứng & thời gian hơn)</span>
                 </label>
+
+                <!-- Chọn ngữ cảnh số người nói (chỉ áp dụng khi bật Phân tách người nói) -->
+                <div id="diarize-mode-row" style="margin-top: 8px; padding-left: 24px; display: none;
+                        align-items: center; gap: 16px; color: #cbd5e1; font-size: 13px; flex-wrap: wrap;">
+                    <span style="color: #94a3b8;">Ngữ cảnh:</span>
+                    <label style="display: flex; align-items: center; cursor: pointer;">
+                        <input type="radio" name="diarize-mode" value="phone" checked
+                            style="margin-right: 6px; cursor: pointer; accent-color: #3b82f6;">
+                        Cuộc gọi (2 người)
+                    </label>
+                    <label style="display: flex; align-items: center; cursor: pointer;">
+                        <input type="radio" name="diarize-mode" value="meeting"
+                            style="margin-right: 6px; cursor: pointer; accent-color: #3b82f6;">
+                        Họp (nhiều người – tự dò số người)
+                    </label>
+                </div>
             </div>
 
             <!-- Thanh tiến trình (ẩn khi chưa xử lý) -->
@@ -186,6 +202,52 @@
                     Tải về phụ đề .srt
                 </button>
                 <span id="transcript-stats" class="transcript-stats"></span>
+            </div>
+
+            <!-- ==================== Karaoke Player (hiện sau khi STT xong) ==================== -->
+            <div id="karaoke-panel" class="karaoke-panel" style="display:none;">
+                <div class="karaoke-header">
+                    <span class="karaoke-title">🎤 Nghe lại &amp; dò theo lời (Karaoke)</span>
+                    <span id="kara-filename" class="kara-filename"></span>
+                </div>
+
+                <audio id="karaoke-audio" preload="metadata"></audio>
+
+                <div class="kara-controls">
+                    <button id="kara-rew" class="kara-btn" title="Tua lại 10 giây" aria-label="Tua lại 10 giây">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <polyline points="11 19 2 12 11 5 11 19"></polyline>
+                            <polyline points="22 19 13 12 22 5 22 19"></polyline>
+                        </svg>
+                        <span>10s</span>
+                    </button>
+
+                    <button id="kara-playpause" class="kara-btn kara-btn-main" title="Phát / Dừng"
+                        aria-label="Phát hoặc dừng">
+                        <span id="kara-pp-icon" aria-hidden="true">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                <polygon points="6 4 20 12 6 20 6 4"></polygon>
+                            </svg>
+                        </span>
+                        <span id="kara-pp-text">Phát</span>
+                    </button>
+
+                    <button id="kara-fwd" class="kara-btn" title="Tua tới 10 giây" aria-label="Tua tới 10 giây">
+                        <span>10s</span>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <polyline points="13 19 22 12 13 5 13 19"></polyline>
+                            <polyline points="2 19 11 12 2 5 2 19"></polyline>
+                        </svg>
+                    </button>
+
+                    <span id="kara-time" class="kara-time">00:00 / 00:00</span>
+                    <input id="kara-seek" class="kara-seek" type="range" min="0" max="100" value="0" step="0.1"
+                        aria-label="Thanh tua thời gian">
+                </div>
+
+                <div id="karaoke-lyrics" class="kara-lyrics" aria-label="Lời thoại đồng bộ theo audio"></div>
             </div>
         </section>
 
@@ -264,7 +326,7 @@
     </footer>
 
     <!-- ==================== Scripts ==================== -->
-    <script src="static/app.js?v=2.1"></script>
+    <script src="static/app.js?v=2.2"></script>
 </body>
 
 </html>

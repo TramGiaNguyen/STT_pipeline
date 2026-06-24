@@ -86,6 +86,30 @@ ANALYSIS_PROMPT = """Bạn là Thư ký chuyên nghiệp đang lập biên bản
 
 # ==================== Gemini API ====================
 
+def _parse_gemini_json(response_text: str) -> dict:
+    """
+    Parse JSON do Gemini trả về một cách 'khoan dung'.
+
+    Vì sao cần: prompt yêu cầu "XUỐNG DÒNG cho mỗi ý" nên Gemini hay chèn KÝ TỰ XUỐNG
+    DÒNG THẬT (\\n, \\t) vào trong các chuỗi "noi_dung"/"ket_luan". json.loads mặc định
+    (strict=True) coi đó là lỗi → "Invalid control character". Ở đây:
+      - Gỡ rào markdown ```json ... ``` nếu model lỡ bọc.
+      - Cắt từ '{' đầu tới '}' cuối (phòng khi có chữ thừa quanh JSON).
+      - Dùng strict=False để CHẤP NHẬN ký tự điều khiển thô trong chuỗi.
+    Các newline này về sau lại có ích: _insert_paragraph_after() tách theo '\\n' thành
+    từng dòng/đoạn đúng như mong muốn.
+    """
+    text = response_text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text).strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        text = text[start:end + 1]
+    return json.loads(text, strict=False)
+
+
 def analyze_transcript_with_gemini(transcript_text: str) -> dict:
     """
     Gọi Gemini 2.5 Flash để phân tích transcript cuộc họp.
@@ -132,8 +156,8 @@ def analyze_transcript_with_gemini(transcript_text: str) -> dict:
                 
                 response_text = response.text.strip()
                 logger.info(f"Gemini ({model_name}) trả về {len(response_text)} ký tự")
-                
-                analysis = json.loads(response_text)
+
+                analysis = _parse_gemini_json(response_text)
                 return analysis
                 
             except json.JSONDecodeError as e:

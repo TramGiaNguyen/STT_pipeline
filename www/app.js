@@ -967,6 +967,17 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    // Hiện/ẩn lựa chọn ngữ cảnh (Cuộc gọi / Họp) theo trạng thái checkbox phân tách người nói
+    const diarizeCheckboxInit = document.getElementById("diarize-checkbox");
+    const diarizeModeRow = document.getElementById("diarize-mode-row");
+    if (diarizeCheckboxInit && diarizeModeRow) {
+        const syncDiarizeModeRow = () => {
+            diarizeModeRow.style.display = diarizeCheckboxInit.checked ? "flex" : "none";
+        };
+        diarizeCheckboxInit.addEventListener("change", syncDiarizeModeRow);
+        syncDiarizeModeRow();
+    }
+
     // Khi chọn file
     if (fileInput && btnUpload) {
         fileInput.addEventListener("change", () => {
@@ -996,6 +1007,9 @@ document.addEventListener("DOMContentLoaded", () => {
             const diarizeCheckbox = document.getElementById("diarize-checkbox");
             if (diarizeCheckbox && diarizeCheckbox.checked) {
                 formData.append("diarize", "true");
+                // Ngữ cảnh số người nói: "phone" (cuộc gọi 2 người) | "meeting" (họp nhiều người)
+                const modeEl = document.querySelector('input[name="diarize-mode"]:checked');
+                formData.append("diarize_mode", modeEl ? modeEl.value : "phone");
             } else {
                 formData.append("diarize", "false");
             }
@@ -1008,6 +1022,11 @@ document.addEventListener("DOMContentLoaded", () => {
             if (btnClearTranscript) btnClearTranscript.style.display = "none";
             if (transcriptStats)  transcriptStats.textContent = "";
             if (progressContainer) progressContainer.style.display = "none";
+
+            // Reset Karaoke + tạo URL phát lại từ chính file đã chọn (không cần tải lại từ server)
+            hideKaraoke();
+            if (window.currentAudioUrl) { try { URL.revokeObjectURL(window.currentAudioUrl); } catch (e) {} }
+            window.currentAudioUrl = URL.createObjectURL(file);
 
             setProcessingState(true, file.name);
             log(`Bắt đầu stream STT: ${file.name} (${lang})`, "info");
@@ -1221,6 +1240,10 @@ document.addEventListener("DOMContentLoaded", () => {
                     if (btnDownload) btnDownload.disabled = false;
                     if (btnDownloadSrt && window.currentSegments.length > 0) btnDownloadSrt.disabled = false;
                 }
+                // Dựng trình phát Karaoke đồng bộ chữ-theo-tiếng
+                if (window.currentSegments && window.currentSegments.length > 0) {
+                    showKaraoke(file, window.currentSegments);
+                }
                 if (btnClearTranscript) btnClearTranscript.style.display = "inline-flex";
 
             } catch (err) {
@@ -1235,6 +1258,9 @@ document.addEventListener("DOMContentLoaded", () => {
                         if (btnDownload) btnDownload.disabled = false;
                         if (btnDownloadSrt && window.currentSegments.length > 0) btnDownloadSrt.disabled = false;
                         if (transcriptStats) transcriptStats.textContent += " (kết quả một phần)";
+                        if (window.currentSegments && window.currentSegments.length > 0) {
+                            showKaraoke(file, window.currentSegments);
+                        }
                     }
                 }
             } finally {
@@ -1313,7 +1339,239 @@ document.addEventListener("DOMContentLoaded", () => {
             fileStatusText.textContent = "Chọn file audio/video để tải lên";
             fileStatusText.className   = "status-text status-ready";
             btnClearTranscript.style.display = "none";
+            // Dọn Karaoke + giải phóng URL audio
+            hideKaraoke();
+            if (window.currentAudioUrl) { try { URL.revokeObjectURL(window.currentAudioUrl); } catch (e) {} window.currentAudioUrl = null; }
             log("Đã xóa transcript", "info");
+        });
+    }
+
+    // =============== Karaoke Player (đồng bộ chữ theo audio) ===============
+    const karaPanel    = document.getElementById("karaoke-panel");
+    const karaAudio    = document.getElementById("karaoke-audio");
+    const karaLyrics   = document.getElementById("karaoke-lyrics");
+    const karaSeek     = document.getElementById("kara-seek");
+    const karaTimeEl   = document.getElementById("kara-time");
+    const karaPpIcon   = document.getElementById("kara-pp-icon");
+    const karaPpText   = document.getElementById("kara-pp-text");
+    const karaFilename = document.getElementById("kara-filename");
+
+    const KARA_ICON_PLAY  = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"></polygon></svg>';
+    const KARA_ICON_PAUSE = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>';
+
+    let karaWords      = [];   // [{el, start, end, lineEl}] đã sắp theo thời gian
+    let karaActiveIdx  = -1;
+    let karaActiveLine = null;
+    let karaRaf        = null;
+
+    /** Định dạng giây → mm:ss hoặc h:mm:ss (0s → "00:00", khác formatDuration trả "?") */
+    function karaFmt(s) {
+        s = Math.max(0, Math.floor(s || 0));
+        const m = Math.floor(s / 60), ss = s % 60, h = Math.floor(m / 60);
+        if (h > 0) return `${h}:${String(m % 60).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+        return `${String(m).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+    }
+
+    /** Dựng các dòng lời + span từng từ kèm timestamp từ window.currentSegments */
+    function buildKaraokeLyrics(segments) {
+        if (!karaLyrics) return;
+        karaLyrics.innerHTML = "";
+        karaWords = [];
+        karaActiveIdx = -1;
+        karaActiveLine = null;
+
+        segments.forEach((seg) => {
+            if (seg.type && seg.type !== "segment") return;
+            const line = document.createElement("div");
+            line.className = "kara-line";
+
+            if (seg.speaker && seg.speaker !== "Không rõ") {
+                const sp = document.createElement("span");
+                sp.className = "kara-speaker";
+                sp.textContent = `[${seg.speaker}] `;
+                line.appendChild(sp);
+            }
+
+            const words = (seg.words && seg.words.length) ? seg.words : null;
+            if (words) {
+                words.forEach((w) => {
+                    if (w.start == null || w.end == null) return;
+                    const span = document.createElement("span");
+                    span.className = "kara-word";
+                    span.textContent = ((w.word || "").trim()) + " ";
+                    const st = +w.start;
+                    span.addEventListener("click", () => karaSeekTo(st));
+                    line.appendChild(span);
+                    karaWords.push({ el: span, start: st, end: +w.end, lineEl: line });
+                });
+            } else {
+                // Segment không có word-timestamp → cả câu là một khối, highlight theo segment
+                const span = document.createElement("span");
+                span.className = "kara-word";
+                span.textContent = ((seg.text || "").trim()) + " ";
+                const st = +seg.start;
+                span.addEventListener("click", () => karaSeekTo(st));
+                line.appendChild(span);
+                karaWords.push({ el: span, start: st, end: +seg.end, lineEl: line });
+            }
+
+            // Chỉ thêm dòng nếu có nội dung
+            if (line.querySelector(".kara-word")) karaLyrics.appendChild(line);
+        });
+
+        // Sắp theo thời gian để tìm từ hiện tại bằng tìm kiếm nhị phân (diarization có thể chồng lấn nhẹ)
+        karaWords.sort((a, b) => a.start - b.start);
+    }
+
+    /** Tìm chỉ số từ đang phát: từ cuối cùng có start <= t (nhị phân) */
+    function karaFindIdx(t) {
+        let lo = 0, hi = karaWords.length - 1, res = -1;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (karaWords[mid].start <= t) { res = mid; lo = mid + 1; }
+            else hi = mid - 1;
+        }
+        return res;
+    }
+
+    /** Cuộn dòng đang hát vào giữa khung lyrics (không cuộn cả trang) */
+    function karaScrollLine(lineEl) {
+        const c = karaLyrics;
+        const top = lineEl.offsetTop - c.clientHeight / 2 + lineEl.clientHeight / 2;
+        c.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    }
+
+    /** Đặt từ đang hát: cập nhật class sung/active incremental + highlight + cuộn dòng */
+    function karaSetActive(idx) {
+        if (idx === karaActiveIdx) return;
+
+        if (karaActiveIdx >= 0 && karaWords[karaActiveIdx]) {
+            karaWords[karaActiveIdx].el.classList.remove("active");
+        }
+        if (idx > karaActiveIdx) {
+            // Tiến tới: các từ đã qua tô màu "đã hát"
+            for (let i = Math.max(0, karaActiveIdx); i < idx; i++) karaWords[i].el.classList.add("sung");
+        } else {
+            // Tua lùi: bỏ "đã hát" các từ phía sau vị trí mới
+            for (let i = idx + 1; i <= karaActiveIdx && i < karaWords.length; i++) {
+                if (i >= 0) karaWords[i].el.classList.remove("sung");
+            }
+        }
+
+        karaActiveIdx = idx;
+        if (idx >= 0) {
+            const w = karaWords[idx];
+            w.el.classList.remove("sung");
+            w.el.classList.add("active");
+            if (w.lineEl !== karaActiveLine) {
+                if (karaActiveLine) karaActiveLine.classList.remove("active");
+                karaActiveLine = w.lineEl;
+                karaActiveLine.classList.add("active");
+                karaScrollLine(karaActiveLine);
+            }
+        }
+    }
+
+    function karaSync() {
+        if (!karaWords.length || !karaAudio) return;
+        const idx = karaFindIdx(karaAudio.currentTime);
+        if (idx !== karaActiveIdx) karaSetActive(idx);
+    }
+
+    function karaUpdateSeekUI() {
+        if (!karaAudio) return;
+        const d = karaAudio.duration || 0, t = karaAudio.currentTime || 0;
+        if (d > 0 && karaSeek) karaSeek.value = (t / d) * 100;
+        if (karaTimeEl) karaTimeEl.textContent = `${karaFmt(t)} / ${karaFmt(d)}`;
+    }
+
+    function karaSyncOnce() { karaSync(); karaUpdateSeekUI(); }
+
+    function karaLoop() { karaSync(); karaRaf = requestAnimationFrame(karaLoop); }
+    function karaStopLoop() { if (karaRaf) { cancelAnimationFrame(karaRaf); karaRaf = null; } }
+
+    function karaSetPlayIcon(playing) {
+        if (karaPpIcon) karaPpIcon.innerHTML = playing ? KARA_ICON_PAUSE : KARA_ICON_PLAY;
+        if (karaPpText) karaPpText.textContent = playing ? "Dừng" : "Phát";
+    }
+
+    function karaSeekTo(t) {
+        if (!karaAudio) return;
+        karaAudio.currentTime = t;
+        if (karaAudio.paused) karaAudio.play().catch(() => {});
+        karaSyncOnce();
+    }
+
+    /** Hiện trình phát và nạp audio + lời */
+    function showKaraoke(file, segments) {
+        if (!karaPanel || !karaAudio || !window.currentAudioUrl) return;
+        buildKaraokeLyrics(segments);
+        if (!karaWords.length) return; // không có timestamp → không hiển thị
+        karaAudio.src = window.currentAudioUrl;
+        karaAudio.load();
+        if (karaFilename) karaFilename.textContent = file && file.name ? file.name : "";
+        karaSetPlayIcon(false);
+        karaUpdateSeekUI();
+        karaPanel.style.display = "block";
+    }
+
+    /** Ẩn + reset trình phát */
+    function hideKaraoke() {
+        if (!karaPanel) return;
+        karaStopLoop();
+        if (karaAudio) {
+            try { karaAudio.pause(); } catch (e) {}
+            karaAudio.removeAttribute("src");
+            try { karaAudio.load(); } catch (e) {}
+        }
+        karaPanel.style.display = "none";
+        if (karaLyrics) karaLyrics.innerHTML = "";
+        karaWords = [];
+        karaActiveIdx = -1;
+        karaActiveLine = null;
+        karaSetPlayIcon(false);
+    }
+
+    // ----- Gắn sự kiện điều khiển (chạy 1 lần khi load) -----
+    if (karaPanel && karaAudio) {
+        const btnRew = document.getElementById("kara-rew");
+        const btnFwd = document.getElementById("kara-fwd");
+        const btnPP  = document.getElementById("kara-playpause");
+
+        if (btnRew) btnRew.addEventListener("click", () => {
+            karaAudio.currentTime = Math.max(0, karaAudio.currentTime - 10);
+            karaSyncOnce();
+        });
+        if (btnFwd) btnFwd.addEventListener("click", () => {
+            const d = karaAudio.duration || Number.MAX_SAFE_INTEGER;
+            karaAudio.currentTime = Math.min(d, karaAudio.currentTime + 10);
+            karaSyncOnce();
+        });
+        if (btnPP) btnPP.addEventListener("click", () => {
+            if (karaAudio.paused) karaAudio.play().catch(() => {});
+            else karaAudio.pause();
+        });
+        if (karaSeek) karaSeek.addEventListener("input", () => {
+            if (karaAudio.duration) {
+                karaAudio.currentTime = (karaSeek.value / 100) * karaAudio.duration;
+                karaSyncOnce();
+            }
+        });
+
+        karaAudio.addEventListener("play",  () => { karaSetPlayIcon(true);  karaStopLoop(); karaLoop(); });
+        karaAudio.addEventListener("pause", () => { karaSetPlayIcon(false); karaStopLoop(); karaSyncOnce(); });
+        karaAudio.addEventListener("ended", () => { karaSetPlayIcon(false); karaStopLoop(); });
+        karaAudio.addEventListener("timeupdate", karaUpdateSeekUI);
+        karaAudio.addEventListener("loadedmetadata", karaUpdateSeekUI);
+        karaAudio.addEventListener("seeked", karaSyncOnce);
+        // Phím tắt: Space = phát/dừng khi panel đang hiển thị và không gõ vào ô nhập
+        document.addEventListener("keydown", (e) => {
+            if (e.code !== "Space" || karaPanel.style.display === "none") return;
+            const tag = (e.target.tagName || "").toLowerCase();
+            if (tag === "input" || tag === "textarea" || tag === "select") return;
+            e.preventDefault();
+            if (karaAudio.paused) karaAudio.play().catch(() => {});
+            else karaAudio.pause();
         });
     }
 

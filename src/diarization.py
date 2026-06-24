@@ -5,14 +5,66 @@ from concurrent.futures import ProcessPoolExecutor, TimeoutError
 
 logger = logging.getLogger(__name__)
 
+
+def _merge_into_main(timeline: List[Dict], main_speakers: set) -> List[Dict]:
+    """
+    Gán lại mọi segment KHÔNG thuộc main_speakers về một trong các speaker chính:
+    chọn speaker có TỔNG OVERLAP thời gian lớn nhất với segment đó
+    (fallback: speaker có segment gần nhất theo thời gian nếu không overlap).
+
+    Dùng chung cho cả 2 chế độ:
+      - Cuộc gọi (2 người): main_speakers = 2 người nói nhiều nhất.
+      - Họp (nhiều người):  main_speakers = tất cả người nói thật (đã bỏ cụm rác).
+    """
+    if not main_speakers:
+        return [dict(t) for t in timeline]
+
+    result: List[Dict] = []
+    for turn in timeline:
+        if turn["speaker"] in main_speakers:
+            result.append(dict(turn))
+            continue
+
+        overlap_scores: Dict[str, float] = {s: 0.0 for s in main_speakers}
+        for other in timeline:
+            if other["speaker"] in main_speakers:
+                o_start = max(turn["start"], other["start"])
+                o_end = min(turn["end"], other["end"])
+                overlap = max(0.0, o_end - o_start)
+                if overlap > 0:
+                    overlap_scores[other["speaker"]] += overlap
+
+        if max(overlap_scores.values()) > 0:
+            best_speaker = max(overlap_scores, key=overlap_scores.get)
+        else:
+            midpoint = (turn["start"] + turn["end"]) / 2.0
+            best_speaker = min(
+                main_speakers,
+                key=lambda s: min(
+                    abs(midpoint - t["start"])
+                    for t in timeline if t["speaker"] == s
+                )
+            )
+
+        new_turn = dict(turn)
+        new_turn["speaker"] = best_speaker
+        result.append(new_turn)
+    return result
+
+
 # ------------------------------------------------------------------ #
 #  Hàm worker – chạy trong Process con riêng biệt                    #
 # ------------------------------------------------------------------ #
 
-def _run_pyannote_process(audio_path: str, token: str) -> List[Dict]:
+def _run_pyannote_process(audio_path: str, token: str, mode: str = "phone") -> List[Dict]:
     """
     Chạy pyannote Speaker Diarization trong một Process riêng để tránh
     xung đột DLL CuDNN với Faster-Whisper đang chạy ở process chính.
+
+    Args:
+        mode: "phone"   → cuộc gọi 8kHz 2 người (ép về đúng 2 người nói chính).
+              "meeting" → họp nhiều người (KHÔNG giới hạn số người, giữ tất cả
+                          người nói thật, chỉ bỏ các cụm rác cực nhỏ).
 
     Trả về: list của dict {"start": float, "end": float, "speaker": str}
     """
@@ -62,9 +114,19 @@ def _run_pyannote_process(audio_path: str, token: str) -> List[Dict]:
         pipeline.to(torch.device("cuda"))
 
     # --- 4. Chạy Diarization ---
-    # Với audio điện thoại 2 người: cố định min=max=2 để Pyannote không "sáng tạo"
-    # ra speaker thứ 3, thứ 4 không có thật — vốn là nguyên nhân chính gây gộp nhầm
-    diarization = pipeline(audio_in_memory, min_speakers=2, max_speakers=2)
+    if mode == "meeting":
+        # Chế độ HỌP nhiều người: KHÔNG giới hạn số người nói — để pyannote tự xác định
+        # số cụm tự nhiên. Phù hợp khi không biết trước có bao nhiêu người trong cuộc họp.
+        diarization = pipeline(audio_in_memory)
+    else:
+        # Chế độ CUỘC GỌI (audio điện thoại 8kHz 2 người):
+        # Ép cứng min=max=2 NGHE thì hợp lý nhưng thực tế lại PHÁ clustering: trên giọng
+        # băng hẹp 8kHz, embedding 2 người khá giống nhau, ép đúng 2 cụm khiến thuật toán
+        # gom ~90% giọng vào MỘT người (đo thực tế trên 4.wav: 90/10) → gộp giọng "dài thòng lòng".
+        # Để max_speakers nới ra (=4) thì pyannote tự tách 2 cụm CÂN BẰNG đúng (đo được 50/48)
+        # cộng vài cụm rác nhỏ; bước "Speaker Consolidation" bên dưới sẽ gộp các cụm phụ
+        # vào đúng 2 người chính → kết quả 2 người cân bằng, ít gộp nhầm hơn hẳn.
+        diarization = pipeline(audio_in_memory, min_speakers=2, max_speakers=4)
 
     # --- 5. Chuyển đổi kết quả sang danh sách dict ---
     timeline: List[Dict] = []
@@ -97,54 +159,29 @@ def _run_pyannote_process(audio_path: str, token: str) -> List[Dict]:
         print(f"  - {spk}: total {dur:.1f} sec")
 
     # --- Speaker Consolidation (Hợp nhất Diễn giả Phụ) ---
-    # Bước này chỉ chạy khi Pyannote vẫn tạo ra > 2 speaker dù đã set max_speakers=2
-    # (có thể xảy ra với một số phiên bản pyannote)
-    if len(speaker_map) > 2:
-        print("[Diarization Process] Merging minor speakers...")
-        sorted_speakers = sorted(spk_durations.items(), key=lambda x: x[1], reverse=True)
-
-        main_speakers = set()
-        main_speakers.add(sorted_speakers[0][0])
-        main_speakers.add(sorted_speakers[1][0])
-
-        consolidated_timeline = []
-        for turn in timeline:
-            spk_name = turn["speaker"]
-            if spk_name in main_speakers:
-                consolidated_timeline.append(dict(turn))
-            else:
-                # Tìm speaker chính có TỔNG OVERLAP lớn nhất với segment này
-                # (chính xác hơn so với tìm khoảng cách gần nhất)
-                overlap_scores: Dict[str, float] = {s: 0.0 for s in main_speakers}
-                for other_turn in timeline:
-                    if other_turn["speaker"] in main_speakers:
-                        o_start = max(turn["start"], other_turn["start"])
-                        o_end = min(turn["end"], other_turn["end"])
-                        overlap = max(0.0, o_end - o_start)
-                        if overlap > 0:
-                            overlap_scores[other_turn["speaker"]] = (
-                                overlap_scores.get(other_turn["speaker"], 0.0) + overlap
-                            )
-
-                # Nếu có overlap thực sự → chọn speaker có overlap lớn nhất
-                # Nếu không có overlap → chọn speaker có segment gần nhất về thời gian
-                if max(overlap_scores.values()) > 0:
-                    best_speaker = max(overlap_scores, key=overlap_scores.get)
-                else:
-                    midpoint = (turn["start"] + turn["end"]) / 2.0
-                    best_speaker = min(
-                        main_speakers,
-                        key=lambda s: min(
-                            abs(midpoint - t["start"])
-                            for t in timeline if t["speaker"] == s
-                        )
-                    )
-
-                new_turn = dict(turn)
-                new_turn["speaker"] = best_speaker
-                consolidated_timeline.append(new_turn)
+    if mode == "meeting":
+        # Chế độ HỌP: GIỮ TẤT CẢ người nói thật. Chỉ gộp các cụm "rác" cực nhỏ
+        # (artefact do nhiễu/overlap, tổng thời lượng < 2s) vào người nói chính gần nhất.
+        # KHÔNG ép về 2 người như chế độ cuộc gọi → tránh nuốt mất người nói ít lời.
+        JUNK_MAX_DURATION = 2.0
+        keep = {s for s, d in spk_durations.items() if d >= JUNK_MAX_DURATION}
+        if not keep:  # an toàn: luôn giữ ít nhất người nói nhiều nhất
+            keep = {max(spk_durations, key=spk_durations.get)}
+        n_junk = len(spk_durations) - len(keep)
+        if n_junk > 0:
+            print(f"[Diarization Process] Meeting mode: giữ {len(keep)} người nói, "
+                  f"gộp {n_junk} cụm rác (<{JUNK_MAX_DURATION}s)")
+        consolidated_timeline = _merge_into_main(timeline, keep)
     else:
-        consolidated_timeline = [dict(t) for t in timeline]
+        # Chế độ CUỘC GỌI: ép về đúng 2 người nói chính (như cũ).
+        # Chỉ chạy khi pyannote vẫn tạo ra > 2 cụm.
+        if len(speaker_map) > 2:
+            print("[Diarization Process] Phone mode: gộp cụm phụ vào 2 người nói chính...")
+            sorted_speakers = sorted(spk_durations.items(), key=lambda x: x[1], reverse=True)
+            keep = {sorted_speakers[0][0], sorted_speakers[1][0]}
+            consolidated_timeline = _merge_into_main(timeline, keep)
+        else:
+            consolidated_timeline = [dict(t) for t in timeline]
 
     # --- Merge các segment liền nhau của cùng 1 speaker ---
     # Điều kiện: cùng speaker + khoảng lặng < 0.4s + tổng độ dài sau merge < 8s
@@ -169,6 +206,18 @@ def _run_pyannote_process(audio_path: str, token: str) -> List[Dict]:
                 merged_timeline.append(dict(turn))
 
     timeline = merged_timeline
+
+    # --- Đánh số lại nhãn cho liền mạch "Người nói 1..N" theo thứ tự xuất hiện ---
+    # Sau khi gộp cụm phụ/rác, các nhãn còn lại có thể bị nhảy số (vd 1, 2, 4).
+    # Đổi tên lại theo thứ tự ai nói trước để hiển thị gọn gàng cho cả họp nhiều người.
+    relabel: Dict[str, str] = {}
+    next_id = 1
+    for turn in timeline:
+        if turn["speaker"] not in relabel:
+            relabel[turn["speaker"]] = f"Người nói {next_id}"
+            next_id += 1
+    for turn in timeline:
+        turn["speaker"] = relabel[turn["speaker"]]
 
     # In kết quả cuối
     final_durations: Dict[str, float] = {}
@@ -208,23 +257,26 @@ class DiarizationProcessor:
             cls._instance = cls()
         return cls._instance
 
-    def process_audio(self, audio_path: str, timeout_sec: int = 600) -> List[Dict]:
+    def process_audio(self, audio_path: str, timeout_sec: int = 600,
+                      mode: str = "phone") -> List[Dict]:
         """
         Phân tách người nói qua Process con độc lập.
 
         Args:
             audio_path:   Đường dẫn file WAV đã convert sang 16 kHz mono.
             timeout_sec:  Thời gian chờ tối đa (giây). Mặc định 600s (10 phút).
+            mode:         "phone" (cuộc gọi 2 người) hoặc "meeting" (họp nhiều người).
 
         Returns:
             List[Dict] mỗi phần tử có dạng {"start", "end", "speaker"}.
         """
-        logger.info(f"Bắt đầu phân tách người nói: {audio_path}")
+        mode = "meeting" if mode == "meeting" else "phone"
+        logger.info(f"Bắt đầu phân tách người nói: {audio_path} (mode={mode})")
 
         try:
             with ProcessPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(
-                    _run_pyannote_process, audio_path, self._token
+                    _run_pyannote_process, audio_path, self._token, mode
                 )
                 try:
                     timeline = future.result(timeout=timeout_sec)
