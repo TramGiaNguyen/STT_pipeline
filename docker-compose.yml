@@ -1,0 +1,61 @@
+# docker-compose: chạy server STT + Postgres lưu lịch sử nhận dạng.
+# Các giá trị ${...} được lấy từ file .env cùng thư mục (POSTGRES_*, API_QUERY_KEY).
+
+services:
+  stt_server:
+    build:
+      context: .
+      args:
+        # cpu (mặc định) cho build nhẹ/nhanh; đổi TORCH_VARIANT=cu121 trong .env để build GPU.
+        TORCH_VARIANT: ${TORCH_VARIANT:-cpu}
+    container_name: stt_pipeline
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app  # Mount thư mục hiện tại vào container để dev, data/models lưu về máy host
+    env_file:
+      - .env  # Lấy các biến môi trường từ .env (HF_TOKEN, GEMINI_API_KEY, ...)
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Kết nối tới service "postgres" bên dưới (host = tên service). Thông tin tài khoản
+      # lấy từ .env. Dòng này GHI ĐÈ DATABASE_URL trong .env (vốn trỏ localhost cho chạy local).
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-stt}:${POSTGRES_PASSWORD:-stt_password}@postgres:5432/${POSTGRES_DB:-stt_db}
+      # Khoá bí mật để truy vấn API lịch sử (chỉ mình bạn biết) — đặt trong .env.
+      - API_QUERY_KEY=${API_QUERY_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy  # chỉ start server khi Postgres đã sẵn sàng
+
+    # Cấp GPU cho container (đã bật). Yêu cầu máy chủ có GPU NVIDIA + Docker có runtime nvidia.
+    # >>> Nếu chạy trên máy KHÔNG có GPU, hãy comment lại khối này (nếu không container sẽ
+    #     không start được vì đòi GPU), và đặt TORCH_VARIANT=cpu trong .env.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: stt_postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-stt}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-stt_password}
+      - POSTGRES_DB=${POSTGRES_DB:-stt_db}
+    volumes:
+      - pgdata:/var/lib/postgresql/data  # dữ liệu DB lưu bền qua volume (không mất khi xoá container)
+    ports:
+      # Chỉ mở cho máy host (127.0.0.1) để nối bằng psql/pgAdmin khi cần — KHÔNG mở ra mạng ngoài.
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stt} -d ${POSTGRES_DB:-stt_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:

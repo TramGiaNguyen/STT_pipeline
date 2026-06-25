@@ -1,4 +1,11 @@
-faster-whisper==1.0.0
+# LƯU Ý: File này là bản "spec" dễ đọc (pin lỏng). Để cài Y HỆT môi trường local
+# (Docker / đẩy server) hãy dùng requirements.lock (ghim == chính xác). Dockerfile đã
+# trỏ vào requirements.lock. Đổi thư viện thì nhớ sinh lại lock (xem đầu file đó).
+#
+# ── STT engine ──────────────────────────────────────────────────────────────
+# Phải khớp môi trường đã tune (1.2.1). Bản 1.0.0 cũ sẽ kéo ctranslate2 về phiên
+# bản khác → dễ lỗi cuDNN/GPU. Kéo theo ctranslate2 (engine suy luận thực tế).
+faster-whisper==1.2.1
 torch==2.4.1+cu121
 torchaudio==2.4.1+cu121
 torchvision==0.19.1+cu121
@@ -22,3 +29,19 @@ jinja2>=3.1.3
 python-dotenv>=1.0.1
 google-genai>=2.0.0
 python-docx>=1.1.0
+
+# ── Lưu lịch sử STT vào PostgreSQL ───────────────────────────────────────────
+# Driver Postgres (bản binary, kèm sẵn libpq → KHÔNG cần libpq-dev khi build Docker).
+psycopg2-binary>=2.9.9
+
+# ── Ghi chú về MODEL (không cài bằng pip) ────────────────────────────────────
+# 1. STT EraX-WoW: đã có sẵn trong models/EraX-WoW-Turbo-V1.1-CT2/ (CTranslate2).
+#    Nếu thiếu: chạy `python scripts/download_model.py`.
+# 2. Diarization pyannote/speaker-diarization-3.1: TẢI LÚC CHẠY từ HuggingFace
+#    → cần internet lần đầu + HF_TOKEN trong .env và đã Accept điều khoản model.
+# 3. Silero VAD: TẢI LÚC CHẠY qua torch.hub (snakers4/silero-vad) → cần internet lần đầu.
+# 4. GEMINI_API_KEY (tạo biên bản) phải có trong .env.
+#
+# ── Tùy chọn (không bắt buộc) ────────────────────────────────────────────────
+# rnnoise: chỉ dùng khử nhiễu mic real-time; code tự bỏ qua nếu không có (fallback
+# sang noisereduce/logmmse). Không cần cài trừ khi muốn chất lượng khử nhiễu cao hơn.

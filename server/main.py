@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import json
 import logging
 import os
@@ -10,7 +11,7 @@ load_dotenv()
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, UploadFile, File, Form, HTTPException, Header, Depends
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import JSONResponse
@@ -19,9 +20,24 @@ from fastapi.middleware.cors import CORSMiddleware
 import tempfile
 
 from server.stt_ws import STTWebSocketHandler
+from server import db
 
 # ThreadPoolExecutor riêng cho file transcription (tránh block event loop)
 _file_transcribe_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="file_transcribe")
+
+
+# ==== Bảo vệ API truy vấn bằng khoá bí mật ====
+# Đặt khoá trong biến môi trường API_QUERY_KEY (chỉ mình bạn biết). Mọi request tới
+# các endpoint /api/records phải kèm header  X-API-Key: <khoá>  thì mới được truy cập.
+def require_api_key(x_api_key: str = Header(None, alias="X-API-Key")):
+    """Dependency FastAPI: chặn nếu thiếu/sai khoá. So sánh hằng-thời-gian chống dò khoá."""
+    expected = os.environ.get("API_QUERY_KEY")
+    if not expected:
+        # Chưa cấu hình khoá → khoá toàn bộ API truy vấn để tránh lộ dữ liệu ngoài ý muốn.
+        raise HTTPException(status_code=503, detail="API truy vấn chưa được bật (thiếu API_QUERY_KEY trên server)")
+    if not x_api_key or not hmac.compare_digest(str(x_api_key), str(expected)):
+        raise HTTPException(status_code=401, detail="Sai hoặc thiếu khoá API (header X-API-Key)")
+    return True
 
 
 def _smooth_word_speakers(words):
@@ -80,6 +96,31 @@ def _smooth_word_speakers(words):
         words[k]["speaker"] = spks[k]
     return words
 
+
+def _build_transcript_text(segments, with_speaker=False):
+    """
+    Ghép danh sách segment thành một đoạn văn bản đọc được để lưu DB.
+    Nếu có diarize (with_speaker=True) thì xuống dòng + gắn nhãn [Người nói X] mỗi khi
+    đổi lượt thoại; ngược lại chỉ nối các câu lại với nhau.
+    """
+    parts = []
+    last_speaker = None
+    for seg in segments:
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        spk = seg.get("speaker")
+        if with_speaker and spk:
+            if spk != last_speaker:
+                parts.append(f"\n[{spk}]: {text}")
+                last_speaker = spk
+            else:
+                parts.append(text)
+        else:
+            parts.append(text)
+    return " ".join(parts).strip()
+
+
 # Cấu hình logging
 logging.basicConfig(
     level=logging.INFO,
@@ -111,6 +152,13 @@ async def lifespan(app: FastAPI):
         logger.error("Chạy 'python scripts/download_model.py' để tải mô hình")
     except Exception as e:
         logger.error(f"Lỗi khởi tạo STT: {e}")
+
+    # Khởi tạo DB lưu lịch sử STT (best-effort, có retry vì Postgres có thể chưa kịp sẵn sàng)
+    # Chạy trong threadpool để không block event loop khi retry (init_db có sleep).
+    try:
+        await run_in_threadpool(db.init_db)
+    except Exception as e:
+        logger.error(f"Lỗi khởi tạo DB (bỏ qua, vẫn chạy không lưu): {e}")
 
     logger.info("=" * 50)
 
@@ -206,6 +254,12 @@ async def transcribe_stream_endpoint(
     language: str = Form("vi"),
     diarize: str = Form("false"),
     diarize_mode: str = Form("phone"),  # "phone" (cuộc gọi 2 người) | "meeting" (họp nhiều người)
+    ID_cuoc_hop: str = Form(None),
+    ho_va_ten: str = Form(None),
+    ten_file: str = Form(None),
+    x_id_cuoc_hop: str = Header(None, alias="X-ID-Cuoc-Hop"),
+    x_ho_va_ten: str = Header(None, alias="X-Ho-Va-Ten"),
+    x_ten_file: str = Header(None, alias="X-Ten-File"),
 ):
     """
     Streaming STT endpoint qua Server-Sent Events (SSE).
@@ -222,6 +276,11 @@ async def transcribe_stream_endpoint(
         raise HTTPException(status_code=503, detail="Máy chủ STT chưa sẵn sàng")
 
     from src.audio_utils import convert_to_16k_mono, convert_to_wav_mono, enhance_audio_file
+
+    # Xử lý các tham số header
+    final_id_cuoc_hop = ID_cuoc_hop or x_id_cuoc_hop
+    final_ho_va_ten = ho_va_ten or x_ho_va_ten
+    final_ten_file = ten_file or x_ten_file or file.filename
 
     # 1. Lưu file upload vào temp
     suffix = Path(file.filename).suffix if file.filename else ".tmp"
@@ -409,17 +468,63 @@ async def transcribe_stream_endpoint(
             _file_transcribe_executor.submit(sync_worker)
 
             segment_count = 0
+            collected_segments = []   # gom lại để lưu vào DB sau khi stream xong
+            total_duration = None
+            detected_language = None
             while True:
                 event = await queue.get()
                 if event is None:
                     break
-                if event.get("type") == "segment":
+                etype = event.get("type")
+                if etype == "info":
+                    total_duration = event.get("total_duration", total_duration)
+                    detected_language = event.get("language", detected_language)
+                elif etype == "segment":
                     segment_count += 1
+                    collected_segments.append({
+                        "start": event.get("start"),
+                        "end": event.get("end"),
+                        "text": event.get("text", ""),
+                        "speaker": event.get("speaker"),
+                    })
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0)  # yield cho event loop, tránh block
 
+            # Lưu kết quả STT vào Postgres (best-effort: lỗi DB KHÔNG làm hỏng phản hồi).
+            # Chỉ lưu khi có ÍT NHẤT 1 segment — tránh ghi bản ghi rác khi audio rỗng hoặc
+            # quá trình xử lý lỗi giữa chừng (vd diarization nổ → 0 segment).
+            saved_id = None
+            if segment_count > 0:
+                try:
+                    transcript_text = _build_transcript_text(collected_segments, diarize == "true")
+                    saved_id = await run_in_threadpool(
+                        db.save_transcription,
+                        id_cuoc_hop=final_id_cuoc_hop,
+                        ho_va_ten=final_ho_va_ten,
+                        ten_file=final_ten_file,
+                        language=detected_language or (_lang or language),
+                        diarize=(diarize == "true"),
+                        diarize_mode=diarize_mode if diarize == "true" else None,
+                        num_segments=segment_count,
+                        duration_sec=total_duration,
+                        transcript=transcript_text,
+                        segments=collected_segments,
+                    )
+                except Exception as e:
+                    logger.error(f"Lưu DB thất bại (bỏ qua, không ảnh hưởng kết quả): {e}")
+            else:
+                logger.info("Không lưu DB: phiên này 0 segment (audio rỗng hoặc xử lý lỗi giữa chừng).")
+
             # Gửi event done
-            yield f'data: {{"type":"done","total_segments":{segment_count}}}\n\n'
+            done_payload = {
+                "type": "done",
+                "total_segments": segment_count,
+                "ID_cuoc_hop": final_id_cuoc_hop,
+                "ho_va_ten": final_ho_va_ten,
+                "ten_file": final_ten_file,
+                "record_id": saved_id,   # id bản ghi trong DB (None nếu không lưu được)
+            }
+            yield f"data: {json.dumps(done_payload, ensure_ascii=False)}\n\n"
 
         finally:
             # Dọn dẹp temp files sau khi stream xong
@@ -442,10 +547,62 @@ async def transcribe_stream_endpoint(
     )
 
 
+# ==== API TRUY VẤN LỊCH SỬ STT (bảo vệ bằng khoá bí mật) ====
+# Dùng trên Postman: thêm header  X-API-Key: <khoá trong API_QUERY_KEY>.
+#   GET /api/records                 -> danh sách (metadata + preview), lọc & phân trang
+#   GET /api/records/{id}            -> chi tiết đầy đủ (transcript + segments)
+# Tham số lọc cho danh sách: ?limit=&offset=&id_cuoc_hop=&ho_va_ten=
+
+@app.get("/api/records")
+async def list_records(
+    _auth: bool = Depends(require_api_key),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    id_cuoc_hop: str = Query(None),
+    ho_va_ten: str = Query(None),
+):
+    """Liệt kê các bản ghi STT đã lưu (mới nhất trước). Cần header X-API-Key."""
+    try:
+        result = await run_in_threadpool(
+            db.list_transcriptions,
+            limit=limit, offset=offset, id_cuoc_hop=id_cuoc_hop, ho_va_ten=ho_va_ten,
+        )
+        return JSONResponse(result)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=f"DB chưa sẵn sàng: {e}")
+    except Exception as e:
+        logger.error(f"Lỗi truy vấn danh sách: {e}")
+        raise HTTPException(status_code=500, detail="Lỗi truy vấn cơ sở dữ liệu")
+
+
+@app.get("/api/records/{rec_id}")
+async def get_record(
+    rec_id: int,
+    _auth: bool = Depends(require_api_key),
+):
+    """Lấy đầy đủ 1 bản ghi STT theo id (transcript + segments). Cần header X-API-Key."""
+    try:
+        rec = await run_in_threadpool(db.get_transcription, rec_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=f"DB chưa sẵn sàng: {e}")
+    except Exception as e:
+        logger.error(f"Lỗi truy vấn bản ghi {rec_id}: {e}")
+        raise HTTPException(status_code=500, detail="Lỗi truy vấn cơ sở dữ liệu")
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy bản ghi id={rec_id}")
+    return JSONResponse(rec)
+
+
 @app.post("/api/transcribe-file")
 async def transcribe_file_endpoint(
     file: UploadFile = File(...),
-    language: str = Form("vi")
+    language: str = Form("vi"),
+    ID_cuoc_hop: str = Form(None),
+    ho_va_ten: str = Form(None),
+    ten_file: str = Form(None),
+    x_id_cuoc_hop: str = Header(None, alias="X-ID-Cuoc-Hop"),
+    x_ho_va_ten: str = Header(None, alias="X-Ho-Va-Ten"),
+    x_ten_file: str = Header(None, alias="X-Ten-File"),
 ):
     """
     Endpoint upload file âm thanh để nhận dạng STT.
@@ -453,6 +610,11 @@ async def transcribe_file_endpoint(
     """
     if not STTWebSocketHandler._initialized or STTWebSocketHandler._stt_engine is None:
         raise HTTPException(status_code=503, detail="Máy chủ STT chưa sẵn sàng")
+
+    # Xử lý các tham số header
+    final_id_cuoc_hop = ID_cuoc_hop or x_id_cuoc_hop
+    final_ho_va_ten = ho_va_ten or x_ho_va_ten
+    final_ten_file = ten_file or x_ten_file or file.filename
 
     # Lưu file tạm thời để xử lý
     fd, temp_path = tempfile.mkstemp(suffix=Path(file.filename).suffix)
@@ -479,7 +641,13 @@ async def transcribe_file_endpoint(
         )
 
         full_text = " ".join([seg["text"] for seg in results])
-        return JSONResponse({"text": full_text, "segments": results})
+        return JSONResponse({
+            "text": full_text, 
+            "segments": results,
+            "ID_cuoc_hop": final_id_cuoc_hop,
+            "ho_va_ten": final_ho_va_ten,
+            "ten_file": final_ten_file
+        })
         
     except Exception as e:
         logger.error(f"Lỗi khi xử lý file upload: {e}")
@@ -494,6 +662,12 @@ async def subtitle_export_endpoint(
     file: UploadFile = File(...),
     language: str = Form("vi"),
     diarize_mode: str = Form("phone"),  # "phone" (cuộc gọi 2 người) | "meeting" (họp nhiều người)
+    ID_cuoc_hop: str = Form(None),
+    ho_va_ten: str = Form(None),
+    ten_file: str = Form(None),
+    x_id_cuoc_hop: str = Header(None, alias="X-ID-Cuoc-Hop"),
+    x_ho_va_ten: str = Header(None, alias="X-Ho-Va-Ten"),
+    x_ten_file: str = Header(None, alias="X-Ten-File"),
 ):
     """
     API Upload âm thanh và trả về trực tiếp file phụ đề (.srt)
@@ -501,6 +675,11 @@ async def subtitle_export_endpoint(
     """
     if not STTWebSocketHandler._initialized or STTWebSocketHandler._stt_engine is None:
         raise HTTPException(status_code=503, detail="Máy chủ STT chưa sẵn sàng")
+
+    # Xử lý các tham số header
+    final_id_cuoc_hop = ID_cuoc_hop or x_id_cuoc_hop
+    final_ho_va_ten = ho_va_ten or x_ho_va_ten
+    final_ten_file = ten_file or x_ten_file or file.filename
 
     fd, temp_path = tempfile.mkstemp(suffix=Path(file.filename).suffix if file.filename else ".tmp")
     try:
@@ -558,7 +737,12 @@ async def subtitle_export_endpoint(
         from fastapi.responses import StreamingResponse
         stream = io.StringIO(srt_content)
         original_name = Path(file.filename).stem if file.filename else "audio"
-        file_name = f"{original_name}_subtitle.srt"
+        
+        # Nếu app truyền ten_file thì dùng làm tên file tải về
+        if final_ten_file:
+            file_name = final_ten_file if final_ten_file.endswith('.srt') else f"{final_ten_file}.srt"
+        else:
+            file_name = f"{original_name}_subtitle.srt"
 
         return StreamingResponse(
             iter([stream.getvalue()]),

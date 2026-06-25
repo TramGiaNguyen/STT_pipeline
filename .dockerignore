@@ -1,0 +1,51 @@
+# ── Môi trường ảo Windows — KHÔNG đưa vào image Linux ────────────────────────
+# Container tự cài thư viện từ requirements.lock; venv Windows vừa nặng (GB) vừa
+# không dùng được trên Linux. Đây là thứ quan trọng nhất cần loại.
+venv/
+.venv/
+env/
+
+# ── Bí mật — KHÔNG bake vào image (truyền lúc chạy qua env_file/--env-file) ───
+.env
+.env.*
+
+# ── Git & metadata ──────────────────────────────────────────────────────────
+.git/
+.gitignore
+.dockerignore
+README.md
+
+# ── Python cache / test ─────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+tests/
+
+# ── File tạm / scratch / debug sinh ra khi chạy ─────────────────────────────
+scratch_*
+*.log
+timeline_debug.json
+meetings.db
+
+# ── Model STT (~7GB!) — KHÔNG bake vào image ────────────────────────────────
+# Lúc chạy bằng docker-compose, models/ đã được mount từ máy host qua "volumes: .:/app",
+# nên KHÔNG cần copy 7GB này vào image (vừa lâu build, vừa phình image, vừa hết ổ cứng).
+# >>> Nếu sau này deploy KHÔNG mount (docker run thuần), hãy XOÁ dòng dưới hoặc mount
+#     models/ qua volume riêng, nếu không container sẽ không tìm thấy model.
+models/
+
+# ── Dữ liệu test nặng (không cần khi chạy server) ───────────────────────────
+*.wav
+*.mp3
+*.m4a
+subtitle_*.srt
+transcript_*.txt
+
+# ── IDE ─────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+
+# LƯU Ý: KHÔNG loại models/ (chứa model STT EraX local — cần bake vào image),
+# www/, server/, src/, *.docx (template biên bản), requirements*.

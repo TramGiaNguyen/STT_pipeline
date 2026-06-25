@@ -1,4 +1,5 @@
 import logging
+import multiprocessing
 import os
 from typing import List, Dict, Optional
 from concurrent.futures import ProcessPoolExecutor, TimeoutError
@@ -274,7 +275,13 @@ class DiarizationProcessor:
         logger.info(f"Bắt đầu phân tách người nói: {audio_path} (mode={mode})")
 
         try:
-            with ProcessPoolExecutor(max_workers=1) as executor:
+            # QUAN TRỌNG: ép start method = "spawn" cho process con.
+            # Trên Linux mặc định là "fork" → process con kế thừa CUDA đã được init ở process
+            # cha (STT/VAD đã nạp lên GPU) → lỗi "Cannot re-initialize CUDA in forked subprocess".
+            # "spawn" tạo process Python mới hoàn toàn, tự init CUDA sạch — giống hệt hành vi mặc
+            # định trên Windows (nơi code này vốn chạy tốt). Không ảnh hưởng khi chạy CPU.
+            mp_ctx = multiprocessing.get_context("spawn")
+            with ProcessPoolExecutor(max_workers=1, mp_context=mp_ctx) as executor:
                 future = executor.submit(
                     _run_pyannote_process, audio_path, self._token, mode
                 )
