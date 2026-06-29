@@ -32,12 +32,24 @@ TEMPLATE_PATH = Path(__file__).parent.parent / "TEMPLATE_Bien_ban_hop_chuyen_mon
 ANALYSIS_PROMPT = """Bạn là Thư ký chuyên nghiệp đang lập biên bản họp chuyên môn cho Viện Trí tuệ nhân tạo và Chuyển đổi số (AIDTI), Trường Đại học Bình Dương. Nhiệm vụ của bạn là đọc bản ghi âm cuộc họp và trích xuất thông tin để điền vào biên bản.
 
 **YÊU CẦU NGHIÊM NGẶT VỀ VĂN PHONG VÀ ĐỊNH DẠNG:**
-1. Văn phong hành chính, khách quan: Tuyệt đối KHÔNG viết theo kiểu kể chuyện hay bình luận cá nhân (VD: Không dùng "Cuộc họp diễn ra trong không khí...", "Cuộc họp được điều hành bởi..."). Sử dụng các từ ngữ chỉ đạo, giao việc như: "Giao [Ai đó] thực hiện...", "Thống nhất...", "Yêu cầu...", "Đề nghị...", "Tiếp tục triển khai...".
+1. Văn phong hành chính, khách quan: Tuyệt đối KHÔNG viết theo kiểu kể chuyện hay bình luận cá nhân (VD: Không dùng "Cuộc họp diễn ra trong không khí...", "Cuộc họp được điều hành bởi..."). Sử dụng các từ ngữ chỉ đạo, giao việc như: "Giao [Tên người/đơn vị] thực hiện...", "Thống nhất...", "Tiếp tục triển khai...". Khi một việc đã có người/đơn vị nhận, PHẢI mở đầu bằng "Giao " + TÊN (KHÔNG có chữ "cho" sau "Giao"), chứ KHÔNG dùng "Yêu cầu...", "Đề nghị...".
 2. Tuyệt đối KHÔNG dùng Markdown hay Bullet/Đánh số: KHÔNG sử dụng các ký tự ** hoặc * hoặc #. Tuyệt đối KHÔNG dùng gạch đầu dòng (-) hay đánh số (1., 2., a., b.).
 3. XUỐNG DÒNG CHO MỖI Ý: Mỗi ý chính hoặc một công việc/chỉ đạo cụ thể PHẢI được XUỐNG DÒNG (tạo thành một dòng mới). Tuyệt đối KHÔNG gộp chung nhiều việc vào một đoạn văn dài liên tục.
 4. Mục Nội dung cuộc họp ("noi_dung"): CHỈ ghi rất NGẮN GỌN các chủ đề chính được thảo luận. Mỗi chủ đề XUỐNG DÒNG. Tuyệt đối KHÔNG ghi chi tiết nhiệm vụ ở phần này.
 5. Mục Kết luận cuộc họp ("ket_luan"): Đây mới là nơi ghi CHI TIẾT các chỉ đạo, phân công nhiệm vụ. Gộp các nhiệm vụ thành từng nhóm (Tên mục). Nội dung bên trong trình bày rõ ràng ai làm gì. MỖI CHỈ ĐẠO/NHIỆM VỤ PHẢI XUỐNG DÒNG.
-6. Danh sách thành viên: Trích xuất tên người từ ngữ cảnh. Nếu không rõ, để trống.
+   - BẮT BUỘC cú pháp câu giao việc (để hệ thống trích xuất công việc đọc đúng): mỗi việc có người/đơn vị nhận PHẢI theo mẫu **"Giao " + [TÊN] + [ĐỘNG TỪ] + [nội dung] + [thời hạn nếu có]**, trong đó:
+       • NGAY SAU "Giao" là TÊN người/đơn vị — TUYỆT ĐỐI KHÔNG chèn "cho" (viết "Giao Hiếu ...", KHÔNG viết "Giao cho Hiếu ...").
+       • [ĐỘNG TỪ] đứng NGAY SAU tên và PHẢI chọn trong danh sách (chỉ dùng đúng các từ này): thực hiện, chuẩn bị, phối hợp, xây dựng, triển khai, tổ chức, rà soát, kiểm tra, cập nhật, hoàn thiện, tiếp tục, gửi, hướng dẫn, nhắc nhở, phụ trách, điều phối, đào tạo, kết nối, liên hệ, soạn thảo, nắm rõ. Nếu việc gốc dùng động từ khác (trao đổi/dọn dẹp/học/bật/nhận thông tin...), hãy diễn đạt lại bằng một động từ trong danh sách (vd "dọn dẹp" → "thực hiện dọn dẹp", "học vài câu" → "chuẩn bị một vài câu", "bật 3 TV" → "chuẩn bị bật 3 TV", "nhận thông tin" → "nắm rõ thông tin", "trao đổi" → "phối hợp").
+       • Nhiều người cùng làm: ngăn cách bằng DẤU PHẨY, KHÔNG dùng "và" (viết "Giao Tài, Khang chuẩn bị ...", KHÔNG viết "Giao Tài và Khang ...").
+       • Người chỉ PHỐI HỢP (không trực tiếp làm) ghi bằng cụm "phối hợp với [Tên]" trong câu.
+       • TÊN phải VIẾT GIỐNG HỆT tên trong danh sách thành viên (mục "thanh_vien"), KHÔNG kèm xưng hô ("anh","chị","thầy","cô","em").
+     VD ĐÚNG: "Giao Hiếu phối hợp với Quang, Nhân chuẩn bị các mô hình robot, IoT để trưng bày."; "Giao Tài, Khang chuẩn bị bật 3 TV (1 TV giữa, 2 TV cánh) để trình chiếu sản phẩm."; "Giao Huân chuẩn bị một vài câu giao tiếp tiếng Nga cơ bản để chào hỏi đoàn."
+   - Với nội dung KHÔNG gắn người/đơn vị cụ thể (quyết định/thống nhất chung, thông tin tham khảo), giữ cách diễn đạt trung tính như "Thống nhất...", "Tiếp tục triển khai..." và KHÔNG được ép thêm "Giao" khi không có ai/đơn vị nhận việc.
+6. Danh sách thành viên ("thanh_vien") — quan trọng cho việc đối chiếu phân công:
+   - CHỈ liệt kê những người THỰC SỰ được nhắc tên trong cuộc họp. KHÔNG thêm phần tử trống/độn để đủ chỗ — bao nhiêu người thì bấy nhiêu dòng.
+   - Mỗi người chỉ xuất hiện MỘT lần với MỘT tên chuẩn duy nhất. Nếu một người bị phiên âm thành nhiều biến thể do lỗi nhận dạng giọng nói (vd "Phố"/"Phú", "Khang"/"Khen"), hãy GỘP về một tên và dùng nhất quán.
+   - "ho_ten" KHÔNG kèm xưng hô ("anh", "chị", "thầy", "cô", "em") — xưng hô/chức danh để ở "chuc_vu". Ưu tiên họ tên đầy đủ nếu transcript có; nếu chỉ có tên gọi thì giữ đúng tên đó.
+   - BẮT BUỘC nhất quán: mọi tên xuất hiện trong "ket_luan" (sau "Giao", sau "phối hợp với"...) phải TRÙNG KHỚP TỪNG KÝ TỰ với một "ho_ten" trong "thanh_vien". Nếu một người được giao việc mà chưa có trong "thanh_vien" thì PHẢI bổ sung họ vào danh sách.
 7. Trường "so_bien_ban": CHỈ ghi CON SỐ (VD: "180"). KHÔNG ghi kèm "/BB-AIDTI" hay bất kỳ hậu tố nào. Nếu không rõ, để trống "".
 
 **QUY TẮC VỀ PHIÊN HỌP:**
@@ -68,7 +80,7 @@ ANALYSIS_PROMPT = """Bạn là Thư ký chuyên nghiệp đang lập biên bản
       "ket_luan": [
         {
           "ten_muc": "Hoạt động A",
-          "noi_dung": "Giao thầy X thực hiện Y. Thống nhất triển khai Z."
+          "noi_dung": "Giao Nguyễn Văn X thực hiện Y trước ngày 30/06/2026. Thống nhất triển khai Z."
         }
       ],
       "gio_ket_thuc": "",

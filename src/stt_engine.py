@@ -61,6 +61,53 @@ def clean_model_artifacts(text: str) -> str:
     return text
 
 
+# Bảng sửa thuật ngữ chuyên ngành hay bị nghe nhầm trên audio họp công nghệ
+# (đoàn Nga, AI/Robotics/IoT, drone, mentor, brochure...). EraX nghe các từ tiếng Anh
+# này thành âm tiết tiếng Việt gần giống → sửa lại đúng chính tả sau khi nhận dạng.
+# CHỈ khớp các cụm garble đặc trưng (không phải từ tiếng Việt hợp lệ) nên KHÔNG ảnh
+# hưởng cuộc gọi tuyển sinh (các cụm này không xuất hiện trong hội thoại tuyển sinh).
+_O = "ôốồổỗộóòỏõọo"  # toàn bộ biến thể nguyên âm "o" hay bị nghe lẫn
+_TERM_FIXES = [
+    (rf"r[{_O}]\s*b[{_O}]t\s*t[ií]ch", "Robotics"),
+    (rf"r[{_O}]\s*b[{_O}]t\s*tic\b", "Robotics"),
+    (r"\bs[úu]p\s*b[ốô]t\b", "support"),
+    (r"\bai\s*[ôo]\s*ti\b", "IoT"),
+    (r"\bi\s*[ôo]\s*ti\b", "IoT"),
+    (r"\biot\b", "IoT"),
+    (r"b[ồô]\s*tr[uùũ]a", "brochure"),
+    (r"r[ồô]\s*ch[uơ]a", "brochure"),
+    (r"r[ồô]\s*chơi", "brochure"),
+    (r"\bmen\s*to\b", "mentor"),
+    (r"\bmơn\s*to\b", "mentor"),
+    (r"\bco\s*b[ốô]t\b", "cobot"),
+    (r"\bcô\s*bớt\b", "cobot"),
+    (r"\bcobert\b", "cobot"),
+    (rf"c[{_O}]n\s*tron", "con drone"),
+    (r"\bcon\s*ron\b", "con drone"),
+    (r"sờ\s*mát\s*ba\s*đê\s*bê\s*đê\s*ru", "Smart 3D BDU"),
+    (r"smart\s*3d\s*pdu", "Smart 3D BDU"),
+]
+_TERM_RE = [(re.compile(p, re.IGNORECASE), r) for p, r in _TERM_FIXES]
+
+
+def correct_domain_terms(text: str) -> str:
+    """
+    Sửa các thuật ngữ tiếng Anh chuyên ngành bị nghe nhầm thành âm tiếng Việt.
+
+    Vd: "rô bốt tích" → "Robotics", "súp bốt" → "support", "men to" → "mentor",
+    "bồ trùa"/"rồ chơi" → "brochure", "côn tron"/"con ron" → "con drone",
+    "ai ô ti"/"iot" → "IoT", "sờ mát ba đê bê đê ru" → "Smart 3D BDU".
+
+    An toàn cho cuộc gọi tuyển sinh: các cụm garble này không trùng từ tiếng Việt
+    hợp lệ nên không sửa nhầm nội dung hội thoại thường.
+    """
+    if not text:
+        return text
+    for rx, rep in _TERM_RE:
+        text = rx.sub(rep, text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _max_immediate_repeat(tokens: List[str], n: int) -> int:
     """
     Đếm số lần một n-gram lặp LIÊN TIẾP (back-to-back) tối đa trong chuỗi token.
@@ -532,8 +579,8 @@ class STTEngine:
             ]
 
             for seg in segments_gen:
-                # Xoá token rác <unk> rò rỉ ở đầu segment trước khi lọc
-                text = clean_model_artifacts(seg.text.strip())
+                # Xoá token rác <unk> rò rỉ ở đầu segment + sửa thuật ngữ chuyên ngành
+                text = correct_domain_terms(clean_model_artifacts(seg.text.strip()))
                 if not text:
                     continue
 

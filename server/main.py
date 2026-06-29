@@ -21,6 +21,7 @@ import tempfile
 
 from server.stt_ws import STTWebSocketHandler
 from server import db
+from src.stt_engine import correct_domain_terms
 
 # ThreadPoolExecutor riêng cho file transcription (tránh block event loop)
 _file_transcribe_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="file_transcribe")
@@ -119,6 +120,89 @@ def _build_transcript_text(segments, with_speaker=False):
         else:
             parts.append(text)
     return " ".join(parts).strip()
+
+
+def _fix_utf8_mojibake(s):
+    """
+    Sửa chuỗi UTF-8 bị giải mã nhầm thành latin-1/cp1252 (vd tên 'Lê Đức Tài' biến thành
+    'LÃª Äá»©c TÃ i' khi field multipart không gửi đúng charset).
+    AN TOÀN: chuỗi đúng tiếng Việt (có 'Đ','ạ'...) không encode được latin-1 → giữ nguyên;
+    chỉ chuỗi mojibake (toàn ký tự dải cp1252) mới được decode lại về UTF-8.
+    """
+    if not s or not any(mark in s for mark in ("Ã", "Â", "Ä", "á»", "áº", "â€")):
+        return s
+    try:
+        return s.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return s
+
+
+def _fmt_srt_ts(sec):
+    """Giây -> 'HH:MM:SS,mmm' cho SRT."""
+    if sec is None:
+        sec = 0.0
+    sec = max(0.0, float(sec))
+    h = int(sec // 3600)
+    m = int((sec % 3600) // 60)
+    s = int(sec % 60)
+    ms = int(round((sec - int(sec)) * 1000))
+    if ms >= 1000:
+        ms = 999
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _build_meeting_txt(rows):
+    """Ghép các lượt nói (đã sắp theo thời gian) thành transcript '[Tên]: nội dung' mỗi dòng."""
+    lines = []
+    for r in rows:
+        name = (r.get("ho_va_ten") or "Không rõ").strip()
+        text = (r.get("transcript") or "").strip()
+        if text:
+            lines.append(f"[{name}]: {text}")
+    return "\n".join(lines)
+
+
+def _build_meeting_srt(rows):
+    """
+    Ghép các lượt nói thành .srt. Vì mỗi lượt là 1 file ghi riêng (mốc thời gian bắt đầu
+    từ 0), ta dựng 1 đồng hồ chạy dồn: lượt sau nối tiếp lượt trước (cách nhau 0.5s).
+    """
+    GAP = 0.5
+    blocks = []
+    idx = 1
+    clock = 0.0
+    for r in rows:
+        name = (r.get("ho_va_ten") or "Không rõ").strip()
+        segs = r.get("segments") or []
+        if segs:
+            base = clock
+            last_end = 0.0
+            for s in segs:
+                st = float(s.get("start") or 0.0)
+                en = float(s.get("end") or st)
+                text = (s.get("text") or "").strip()
+                if not text:
+                    continue
+                blocks.append((idx, base + st, base + en, name, text))
+                idx += 1
+                last_end = max(last_end, en)
+            clock = base + last_end + GAP
+        else:
+            text = (r.get("transcript") or "").strip()
+            if not text:
+                continue
+            dur = r.get("duration_sec") or max(2.0, len(text.split()) / 3.0)
+            blocks.append((idx, clock, clock + dur, name, text))
+            idx += 1
+            clock += dur + GAP
+
+    out = []
+    for (i, st, en, name, text) in blocks:
+        out.append(str(i))
+        out.append(f"{_fmt_srt_ts(st)} --> {_fmt_srt_ts(en)}")
+        out.append(f"[{name}]: {text}")
+        out.append("")
+    return "\n".join(out)
 
 
 # Cấu hình logging
@@ -296,23 +380,33 @@ async def transcribe_stream_endpoint(
             f.write(content)
         logger.info(f"Đã lưu file upload: {temp_original} ({len(content)//1024}KB)")
 
-        # 2a. Tiền xử lý âm thanh (Lọc nhiễu & Chuẩn hóa) - Chạy tự động
-        temp_enhanced = temp_original + "_enhanced.wav"
-        logger.info(f"Đang tiến hành tiền xử lý (Denoise & Normalize)...")
-        # Run_in_threadpool để tránh block event loop
-        await run_in_threadpool(
-            enhance_audio_file,
-            input_path=temp_original,
-            output_path=temp_enhanced,
-            normalize_db=-20.0,
-            apply_denoising=True,
-            apply_vad_filtering=False # Không được cắt khoảng lặng để tránh lệch timestamp
-        )
-
-        # 2b. Luôn convert sang 16kHz mono WAV (Dù enhance_audio_file cũng có thể trả về, nhưng làm thế này đảm bảo format chuẩn nhất)
-        temp_converted = temp_enhanced + "_16k.wav"
-        logger.info(f"Đang convert qua định dạng nhận dạng chuẩn...")
-        await run_in_threadpool(convert_to_16k_mono, temp_enhanced, temp_converted)
+        # 2a. Tiền xử lý âm thanh cho STT — KHÁC NHAU theo chế độ:
+        #   - "phone" (cuộc gọi 8kHz nhiễu): GIỮ lọc nhiễu + chuẩn hoá (đã xác nhận tốt cho điện thoại).
+        #   - "meeting" (họp nhiều người): BỎ lọc nhiễu/nén dải động. Đo trên file họp thực tế:
+        #     spectral-subtraction + DRC tự chế làm méo tiếng → model BỎ SÓT giọng đầu lượt nói
+        #     ("mất mấy chục giây" thoại) và sinh ảo giác; còn khiến kết quả bất ổn với temperature
+        #     fallback. Dùng audio 16k gốc thì phục hồi được các lượt thoại bị mất và ổn định hơn.
+        if diarize_mode == "meeting":
+            temp_converted = temp_original + "_16k.wav"
+            logger.info("[Meeting] Bỏ tiền xử lý lọc nhiễu, dùng audio gốc 16k để tránh méo tiếng/bỏ sót thoại...")
+            await run_in_threadpool(convert_to_16k_mono, temp_original, temp_converted)
+        else:
+            # 2a. Lọc nhiễu & chuẩn hoá cho cuộc gọi điện thoại
+            temp_enhanced = temp_original + "_enhanced.wav"
+            logger.info(f"Đang tiến hành tiền xử lý (Denoise & Normalize)...")
+            # Run_in_threadpool để tránh block event loop
+            await run_in_threadpool(
+                enhance_audio_file,
+                input_path=temp_original,
+                output_path=temp_enhanced,
+                normalize_db=-20.0,
+                apply_denoising=True,
+                apply_vad_filtering=False # Không được cắt khoảng lặng để tránh lệch timestamp
+            )
+            # 2b. Convert sang 16kHz mono WAV (đảm bảo format chuẩn nhất)
+            temp_converted = temp_enhanced + "_16k.wav"
+            logger.info(f"Đang convert qua định dạng nhận dạng chuẩn...")
+            await run_in_threadpool(convert_to_16k_mono, temp_enhanced, temp_converted)
         audio_path = temp_converted
 
         # 2c. Tạo bản sao mono gốc CHO DIARIZATION (không bị ảnh hưởng bởi lọc nhiễu và resample)
@@ -425,7 +519,7 @@ async def transcribe_stream_endpoint(
                                             "type": "segment",
                                             "start": current_words[0]["start"],
                                             "end": current_words[-1]["end"],
-                                            "text": " ".join([xw["word"] for xw in current_words]).strip(),
+                                            "text": correct_domain_terms(" ".join([xw["word"] for xw in current_words]).strip()),
                                             "words": current_words,
                                             "speaker": current_speaker,
                                             "progress": event_dict.get("progress", 0)
@@ -441,7 +535,7 @@ async def transcribe_stream_endpoint(
                                     "type": "segment",
                                     "start": current_words[0]["start"],
                                     "end": current_words[-1]["end"],
-                                    "text": " ".join([xw["word"] for xw in current_words]).strip(),
+                                    "text": correct_domain_terms(" ".join([xw["word"] for xw in current_words]).strip()),
                                     "words": current_words,
                                     "speaker": current_speaker,
                                     "progress": event_dict.get("progress", 0)
@@ -806,6 +900,173 @@ async def generate_bienban_endpoint(
     except Exception as e:
         logger.error(f"[Biên bản] Lỗi không xác định: {e}")
         raise HTTPException(status_code=500, detail=f"Lỗi tạo biên bản: {e}")
+
+
+@app.post("/api/meeting/utterance")
+async def meeting_utterance_endpoint(
+    file: UploadFile = File(...),
+    ID_cuoc_hop: str = Form(None),
+    ho_va_ten: str = Form(None),
+    language: str = Form("vi"),
+    ten_file: str = Form(None),
+    x_id_cuoc_hop: str = Header(None, alias="X-ID-Cuoc-Hop"),
+    x_ho_va_ten: str = Header(None, alias="X-Ho-Va-Ten"),
+    x_ten_file: str = Header(None, alias="X-Ten-File"),
+):
+    """
+    Nhận 1 LƯỢT NÓI (file âm thanh, vd .m4a) từ App giảng viên kèm:
+      - ID_cuoc_hop : mã cuộc họp (để gom nhiều lượt nói lại với nhau)
+      - ho_va_ten   : TÊN THẬT của người đang nói (App truyền vào)
+
+    Xử lý: STT (KHÔNG diarization vì đã biết chính xác người nói) → gắn nhãn theo tên thật
+    → LƯU PHẦN TEXT vào Postgres (KHÔNG lưu file âm thanh; file chỉ là temp, xử lý xong xoá).
+    Trả text về cho App. Khi họp xong, gọi GET /api/meeting/{ID}/export để lấy .txt/.srt
+    của cả cuộc họp rồi đưa vào /api/generate-bienban.
+    """
+    if not STTWebSocketHandler._initialized or STTWebSocketHandler._stt_engine is None:
+        raise HTTPException(status_code=503, detail="Máy chủ STT chưa sẵn sàng")
+
+    final_id_cuoc_hop = _fix_utf8_mojibake(ID_cuoc_hop or x_id_cuoc_hop)
+    final_ho_va_ten = _fix_utf8_mojibake(ho_va_ten or x_ho_va_ten)
+    final_ten_file = _fix_utf8_mojibake(ten_file or x_ten_file or file.filename)
+    if not final_id_cuoc_hop or not final_ho_va_ten:
+        raise HTTPException(status_code=400, detail="Thiếu ID_cuoc_hop hoặc ho_va_ten")
+
+    # Lưu file âm thanh vào TEMP (không lưu vào DB) — xử lý xong xoá ở finally
+    fd, temp_path = tempfile.mkstemp(suffix=Path(file.filename).suffix if file.filename else ".m4a")
+    try:
+        os.close(fd)
+        content = await file.read()
+        with open(temp_path, "wb") as f:
+            f.write(content)
+        logger.info(
+            f"[Utterance] Cuộc họp={final_id_cuoc_hop}, người nói={final_ho_va_ten}, "
+            f"file={final_ten_file} ({len(content)//1024}KB)"
+        )
+
+        # STT qua transcribe_stream để DÙNG LẠI bộ lọc chống ảo giác (blacklist câu bịa
+        # "đoạn trích truyện/bức ảnh...", lọc lặp từ, lọc no_speech/logprob thấp) + sửa thuật ngữ.
+        # → tránh tiếng "wow"/im lặng/nhiễu bị model nghe thành văn bản bậy bạ.
+        # KHÔNG diarization (đã biết chính xác người nói = final_ho_va_ten).
+        engine = STTWebSocketHandler.get_engine()
+
+        def _stt_collect():
+            parts_, segs_ = [], []
+            for ev in engine.transcribe_stream(
+                temp_path, language=language, beam_size=8, condition_on_previous_text=False,
+            ):
+                if ev.get("type") != "segment":
+                    continue
+                # text đã được clean_model_artifacts + correct_domain_terms + lọc ảo giác trong transcribe_stream
+                txt = (ev.get("text") or "").strip()
+                if not txt:
+                    continue
+                parts_.append(txt)
+                segs_.append({
+                    "start": ev.get("start"),
+                    "end": ev.get("end"),
+                    "text": txt,
+                    "speaker": final_ho_va_ten,
+                })
+            return parts_, segs_
+
+        # gắn speaker = TÊN THẬT
+        parts, segments = await run_in_threadpool(_stt_collect)
+        full_text = " ".join(parts).strip()
+        duration = segments[-1]["end"] if segments else None
+
+        # Lưu 1 dòng TEXT vào DB (best-effort). Chỉ lưu khi có nội dung.
+        saved_id = None
+        if full_text:
+            saved_id = await run_in_threadpool(
+                db.save_transcription,
+                id_cuoc_hop=final_id_cuoc_hop,
+                ho_va_ten=final_ho_va_ten,
+                ten_file=final_ten_file,
+                language=language,
+                diarize=False,
+                diarize_mode=None,
+                num_segments=len(segments),
+                duration_sec=duration,
+                transcript=full_text,
+                segments=segments,
+            )
+        else:
+            logger.info("[Utterance] Không có nội dung sau STT → không lưu DB.")
+
+        return JSONResponse({
+            "success": True,
+            "ID_cuoc_hop": final_id_cuoc_hop,
+            "ho_va_ten": final_ho_va_ten,
+            "ten_file": final_ten_file,
+            "text": full_text,
+            "num_segments": len(segments),
+            "record_id": saved_id,
+        })
+
+    except Exception as e:
+        logger.error(f"[Utterance] Lỗi xử lý lượt nói: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+
+@app.get("/api/meeting")
+@app.get("/api/meetings")
+async def list_meetings_endpoint():
+    """
+    Liệt kê TẤT CẢ cuộc họp đang lưu (gom theo ID_cuoc_hop) — dùng khi chưa biết ID nào.
+    Trả về mỗi cuộc họp: số lượt nói, danh sách người nói, thời gian bắt đầu/kết thúc.
+    Lấy ID ở đây rồi gọi /api/meeting/{ID}/export để xuất transcript.
+    """
+    try:
+        meetings = await run_in_threadpool(db.list_meetings)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=f"DB chưa sẵn sàng: {e}")
+    except Exception as e:
+        logger.error(f"[List Meetings] Lỗi truy vấn: {e}")
+        raise HTTPException(status_code=500, detail="Lỗi truy vấn cơ sở dữ liệu")
+    return JSONResponse({"total": len(meetings), "meetings": meetings})
+
+
+@app.get("/api/meeting/{id_cuoc_hop}/export")
+async def meeting_export_endpoint(
+    id_cuoc_hop: str,
+    format: str = Query("txt"),
+):
+    """
+    Xuất transcript HOÀN CHỈNH của 1 cuộc họp: ghép tất cả lượt nói (theo thời gian),
+    mỗi lượt gắn nhãn [Tên người nói thật]. Trả về file .txt (mặc định) hoặc .srt.
+    File .txt này đưa thẳng vào /api/generate-bienban để tạo biên bản.
+    """
+    try:
+        rows = await run_in_threadpool(db.get_meeting_utterances, id_cuoc_hop)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=f"DB chưa sẵn sàng: {e}")
+    except Exception as e:
+        logger.error(f"[Meeting Export] Lỗi truy vấn: {e}")
+        raise HTTPException(status_code=500, detail="Lỗi truy vấn cơ sở dữ liệu")
+
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Chưa có lượt nói nào cho cuộc họp '{id_cuoc_hop}'")
+
+    if (format or "txt").lower() == "srt":
+        content = _build_meeting_srt(rows)
+        ext = "srt"
+    else:
+        content = _build_meeting_txt(rows)
+        ext = "txt"
+
+    filename = f"cuoc_hop_{id_cuoc_hop}.{ext}"
+    return StreamingResponse(
+        iter([content]),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 @app.websocket("/ws/stt")

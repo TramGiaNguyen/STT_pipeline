@@ -2,6 +2,8 @@ import re
 import datetime
 from typing import List, Dict
 
+from src.stt_engine import correct_domain_terms
+
 def format_time_srt(seconds: float) -> str:
     """Chuyển đổi giây sang định dạng SRT: HH:MM:SS,mmm"""
     delta = datetime.timedelta(seconds=seconds)
@@ -29,7 +31,11 @@ def process_text_glossary(text: str) -> str:
     ]
     for pattern, replacement in replacements:
         text = re.sub(pattern, replacement, text)
-    
+
+    # Sửa thêm các thuật ngữ chuyên ngành họp công nghệ (Robotics/IoT/mentor/brochure/
+    # drone/cobot/support/Smart 3D BDU...) để đồng nhất với luồng /api/transcribe-stream.
+    text = correct_domain_terms(text)
+
     # Loại bỏ một số từ thừa vô nghĩa (tùy chọn)
     # text = re.sub(r'(?i)\b(ờm|ờ|ừm)\b', '', text)
     # text = re.sub(r'\s+', ' ', text).strip()

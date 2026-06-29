@@ -24,3 +24,11 @@ __pycache__/
 # Logs
 *.log
 debug-*.log
+
+# Local DB (SQLite) — file runtime, KHÔNG commit
+*.db
+stt_local.db
+
+# File âm thanh / phụ đề test sinh ra khi chạy
+*.m4a
+subtitle_*.srt
