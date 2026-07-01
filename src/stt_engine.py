@@ -40,6 +40,15 @@ PHONE_CALL_PROMPT = (
     "dấu phẩy, dấu chấm đầy đủ."
 )
 
+# PHONE_CALL_PROMPT giờ KHÔNG còn được dùng làm mồi mặc định (giữ lại để tham khảo / bật lại
+# thủ công nếu cần). LÝ DO BỎ — đo trên 3.wav/4.wav/5.m4a/6.wav: BẤT KỲ initial_prompt nào
+# (kể cả prompt đúng ngữ cảnh) đều làm HỎNG cửa sổ decode ~30s ĐẦU TIÊN → model bịa rác
+# (avg_logprob ~ -3.0) rồi bị filter loại → MẤT 30-45s mở đầu, đặc biệt nuốt mất CÂU CHÀO
+# đặc trưng ("Phòng tư vấn tuyển sinh Trường ĐH Bình Dương xin nghe" → "trường đại học bình
+# dương xin nhớ"). Bỏ prompt: câu mở đầu khôi phục được + recall toàn cuộc gọi NHỈNH HƠN
+# (6.wav 89%→93%, 4.wav tín chỉ được phục hồi) vì chính tả thuật ngữ do correct_domain_terms()
+# lo chứ KHÔNG phải prompt. → cả 2 luồng (điện thoại + họp) đều truyền initial_prompt=None.
+
 
 def clean_model_artifacts(text: str) -> str:
     """
@@ -86,17 +95,74 @@ _TERM_FIXES = [
     (r"\bcon\s*ron\b", "con drone"),
     (r"sờ\s*mát\s*ba\s*đê\s*bê\s*đê\s*ru", "Smart 3D BDU"),
     (r"smart\s*3d\s*pdu", "Smart 3D BDU"),
+    # --- Bổ sung từ đối chiếu 5.m4a (các biến thể garble thực tế model sinh ra) ---
+    (r"\bs[uứ]c\s*b[ốô]t\b", "support"),                 # "sức bốt" → support
+    (r"\bao\s*ti\b", "IoT"),                              # "ao ti" → IoT
+    (r"\bb[ờơ]\s*r[ồô]\s*chu[ôơ]ng\b", "brochure"),       # "bờ rồ chuông" → brochure
+    (r"\br[ồô]\s*chu\b", "brochure"),                     # "rồ chu" → brochure
+    (r"s[ờơ]\s*mát\s*ba\s*đê\s*bê\s*đ[iê]\s*[rd]u", "Smart 3D BDU"),  # "...đi du"/"...đê ru"
+    (r"\bth[ăa]m\s*quan\b", "tham quan"),                 # "thăm quan" → "tham quan" (chuẩn hoá)
+    # --- offline (model nghe "offline" thành "học lai"/"ốp lai"; "online" thì nghe đúng) ---
+    # An toàn: "học lai" KHÔNG phải cụm tiếng Việt hợp lệ; "học lại" có dấu (lại≠lai) nên không khớp.
+    (r"\bhọc\s*lai\b", "offline"),
+    (r"\b[ốọóôơ]p\s*lai\b", "offline"),
 ]
 _TERM_RE = [(re.compile(p, re.IGNORECASE), r) for p, r in _TERM_FIXES]
 
 
+# Chữ số ĐƠN đọc thành lời → ký tự số. CHỈ gồm 0-9 (KHÔNG có mười/mươi/trăm... để tránh
+# đụng số đếm thường). Dùng cho việc ghép dãy số điện thoại / mã đọc rời thành chuỗi số.
+_DIGIT_WORD = {
+    "không": "0", "linh": "0", "một": "1", "mốt": "1", "hai": "2", "ba": "3",
+    "bốn": "4", "tư": "4", "năm": "5", "lăm": "5", "nhăm": "5", "sáu": "6",
+    "bảy": "7", "bẩy": "7", "tám": "8", "chín": "9",
+}
+_DIGIT_PUNCT = ".,!?;:…"
+
+
+def normalize_phone_digits(text: str, min_run: int = 4) -> str:
+    """
+    Ghép dãy >= min_run CHỮ SỐ ĐƠN đọc liên tiếp thành chuỗi số (số điện thoại / mã số).
+
+    Vd: "không chín bảy bảy hai hai một tám bốn ba" → "0977221843".
+
+    CHỈ áp dụng cho chuỗi chữ số đơn 0-9 (≥4 token liền nhau) — đủ dài để chắc chắn là
+    số ĐT/mã, KHÔNG phải số đếm thường. Số đếm ("ba đến bốn buổi", "tám triệu", "một học
+    kỳ ba tháng") KHÔNG bị đụng vì mười/mươi/trăm... không nằm trong _DIGIT_WORD và cụm
+    ngắn (<4) được giữ nguyên. Cố ý KHÔNG chuyển số đếm chung sang chữ số: tiếng Việt nói
+    nhập nhằng (năm=5/năm, triệu tiền vs mở số) nên dễ sai + giảm dễ đọc.
+    """
+    if not text:
+        return text
+    toks = text.split()
+    out, i, n = [], 0, len(toks)
+    while i < n:
+        if toks[i].strip(_DIGIT_PUNCT).lower() in _DIGIT_WORD:
+            j, run = i, []
+            while j < n and toks[j].strip(_DIGIT_PUNCT).lower() in _DIGIT_WORD:
+                run.append(toks[j].strip(_DIGIT_PUNCT).lower())
+                j += 1
+            if len(run) >= min_run:
+                trail = toks[j - 1][len(toks[j - 1].rstrip(_DIGIT_PUNCT)):]  # giữ dấu câu cuối
+                out.append("".join(_DIGIT_WORD[t] for t in run) + trail)
+            else:
+                out.extend(toks[i:j])
+            i = j
+        else:
+            out.append(toks[i])
+            i += 1
+    return " ".join(out)
+
+
 def correct_domain_terms(text: str) -> str:
     """
-    Sửa các thuật ngữ tiếng Anh chuyên ngành bị nghe nhầm thành âm tiếng Việt.
+    Sửa các thuật ngữ tiếng Anh chuyên ngành bị nghe nhầm thành âm tiếng Việt + ghép
+    dãy số điện thoại đọc rời thành chuỗi số.
 
     Vd: "rô bốt tích" → "Robotics", "súp bốt" → "support", "men to" → "mentor",
     "bồ trùa"/"rồ chơi" → "brochure", "côn tron"/"con ron" → "con drone",
-    "ai ô ti"/"iot" → "IoT", "sờ mát ba đê bê đê ru" → "Smart 3D BDU".
+    "ai ô ti"/"iot" → "IoT", "sờ mát ba đê bê đê ru" → "Smart 3D BDU", "học lai" → "offline".
+    Cuối cùng gọi normalize_phone_digits() để gom số ĐT/mã đọc rời.
 
     An toàn cho cuộc gọi tuyển sinh: các cụm garble này không trùng từ tiếng Việt
     hợp lệ nên không sửa nhầm nội dung hội thoại thường.
@@ -105,7 +171,82 @@ def correct_domain_terms(text: str) -> str:
         return text
     for rx, rep in _TERM_RE:
         text = rx.sub(rep, text)
-    return re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    return normalize_phone_digits(text)
+
+
+# === CHUẨN HOÁ CÂU CHÀO TỔNG ĐÀI (chỉ luồng CUỘC GỌI) ===
+# Câu chào của tổng đài là CỐ ĐỊNH nhưng hay bị garble ở segment đầu (cửa sổ decode đầu
+# mong manh: "Phòng tư vấn tuyển sinh Trường ĐH Bình Dương xin nghe" → "trường đại học bình
+# dương xin nhớ"/"phòng tuyển sinh chừng học bây giờ sinh nghe"). Vì là câu cố định nên ta
+# thay phần chào bằng bản chuẩn — CHỈ khi nhận diện chắc chắn (có neo + mốc người gọi), nếu
+# không chắc thì để nguyên (tránh bịa hoặc mất nội dung). KHÔNG dùng cho file họp.
+CALL_GREETING = "Dạ alo, Phòng tư vấn tuyển sinh Trường Đại học Bình Dương xin nghe."
+_GREET_PUNCT = ".,!?;:…\"'()"
+# Token NEO của câu chào (model hầu như luôn bắt được dù garble phần còn lại)
+_GREET_ANCHOR_TOK = {"dương", "tuyển", "vấn"}
+# Token đánh dấu NGƯỜI GỌI bắt đầu nói → ranh giới kết thúc câu chào
+_CALLER_START_TOK = {"dạ", "alo", "alô", "ơi", "hỏi", "ưm", "ờ"}
+
+
+def normalize_call_greeting_words(words: List[dict], seg_start: float, seg_end: float):
+    """
+    Thay câu chào tổng đài bị garble (ở segment ĐẦU cuộc gọi) bằng câu chuẩn CALL_GREETING.
+
+    Trả về (new_words, new_text) nếu nhận diện CHẮC CHẮN là câu chào, ngược lại None
+    (để nguyên — vd file 3 có lần đầu bị ảo giác hoàn toàn "đặt vòng tránh thai", không có
+    neo → bỏ qua, không bịa).
+
+    Nhận diện: token NEO {dương, tuyển, vấn} nằm trong ~12 từ đầu. Ranh giới kết thúc chào:
+      - nếu có token NGƯỜI GỌI bắt đầu {dạ, alo, ơi, hỏi, ưm, ờ} SAU neo → cắt tại đó,
+        giữ phần lời người gọi phía sau;
+      - nếu KHÔNG có (segment chỉ chứa câu chào, vd "Dạ alo phần đĩa phương tràm bình dương
+        nha") và segment NGẮN (<=14 từ) → thay TOÀN BỘ segment bằng câu chào chuẩn;
+      - nếu dài mà không thấy ranh giới → bỏ qua (tránh nuốt nội dung).
+
+    Hoạt động ở cấp TỪ để phụ đề SRT (dựng từ words) cũng được sửa, không chỉ field text.
+    """
+    if not words:
+        return None
+    toks = [w["word"].strip(_GREET_PUNCT).lower() for w in words]
+    # Neo nằm trong ~12 từ đầu (câu chào ở ngay đầu segment, có thể bị chèn vài từ garble)
+    anchor_i = next((i for i, t in enumerate(toks[:12]) if t in _GREET_ANCHOR_TOK), None)
+    if anchor_i is None:
+        return None
+    # Mốc người gọi bắt đầu nói, SAU neo
+    marker_i = next(
+        (i for i in range(anchor_i + 1, len(toks)) if toks[i] in _CALLER_START_TOK), None
+    )
+    if marker_i is not None:
+        g_end = words[marker_i]["start"]
+        rest = words[marker_i:]
+    elif len(words) <= 14 and "dương" in toks[:12]:
+        # Cả segment NGẮN chỉ là câu chào (chưa có lời người gọi) → thay toàn bộ.
+        # BẮT BUỘC có "dương" (tên trường Bình Dương) để tránh nhầm câu hỏi người gọi có
+        # chứa "tuyển sinh" (vd "em hỏi tuyển sinh ngành luật") — người gọi gần như không
+        # nói "Bình Dương" ngay câu đầu.
+        g_end = seg_end
+        rest = []
+    else:
+        return None  # dài / không có "dương" / không thấy ranh giới → bỏ qua cho an toàn
+    if g_end <= seg_start:
+        g_end = seg_start + 0.5
+    # Dựng các word cho câu chào chuẩn, rải đều timestamp trong [seg_start, g_end]
+    gtoks = CALL_GREETING.split()
+    step = (g_end - seg_start) / max(len(gtoks), 1)
+    greet_words = [
+        {
+            "word": gw,
+            "start": round(seg_start + k * step, 2),
+            "end": round(seg_start + (k + 1) * step, 2),
+            "probability": 0.99,
+        }
+        for k, gw in enumerate(gtoks)
+    ]
+    new_words = greet_words + rest
+    rest_text = " ".join(w["word"] for w in rest)
+    new_text = (CALL_GREETING + (" " + rest_text if rest_text else "")).strip()
+    return new_words, new_text
 
 
 def _max_immediate_repeat(tokens: List[str], n: int) -> int:
@@ -492,6 +633,8 @@ class STTEngine:
         no_speech_threshold: float = 0.6,
         compression_ratio_threshold: float = 2.4,
         vad_parameters: Optional[dict] = None,
+        initial_prompt: Optional[str] = None,
+        is_phone_call: bool = False,
     ):
         """
         Stream từng segment nhận dạng giọng nói ngay khi faster-whisper xử lý xong.
@@ -536,6 +679,9 @@ class STTEngine:
             # Dùng cấu hình VAD tối ưu cho audio điện thoại 8kHz (ngưỡng thấp, ít gộp nhầm)
             vad_parameters = self.STREAM_VAD_PARAMETERS
 
+        # initial_prompt: mặc định None = KHÔNG mồi (tốt nhất cho cả điện thoại lẫn họp — xem
+        # ghi chú ở PHONE_CALL_PROMPT). Truyền chuỗi nếu muốn mồi thủ công (đánh đổi: mất ~30s đầu).
+
         try:
             segments_gen, info = self.model.transcribe(
                 audio=audio_arg,
@@ -545,7 +691,7 @@ class STTEngine:
                 vad_filter=True,
                 vad_parameters=vad_parameters,
                 temperature=[0.0, 0.2, 0.4, 0.6], # Fallback tự động khi độ tin cậy thấp
-                initial_prompt=PHONE_CALL_PROMPT, # Mồi đúng ngữ cảnh cuộc gọi điện thoại tiếng Việt
+                initial_prompt=initial_prompt, # Mồi theo ngữ cảnh (điện thoại / họp) do caller chọn
                 condition_on_previous_text=condition_on_previous_text,
                 no_speech_threshold=no_speech_threshold,
                 compression_ratio_threshold=compression_ratio_threshold,
@@ -566,16 +712,23 @@ class STTEngine:
             segment_count = 0
             filtered_count = 0
 
-            # Blacklist các câu ảo giác kinh điển của Whisper tiếng Việt
-            _hallucination_blacklist = [
-                "cảm ơn các bạn", "đăng ký kênh", "ông cũng bị cáo buộc",
-                "đài truyền hình", "bản tin", "xin chào các bạn",
-                "hẹn gặp lại", "subtitles by", "tổng thống",
-                "tác phẩm nghệ thuật", "những thông tin tiếp theo",
-                "hàng trăm tình nguyện viên", "cảnh sát đã không tìm thấy",
-                "chính quyền", "tàn phá", "đoạn trích truyện",
-                "homestay và thư giãn", "cơ chế văn pháp",
-                "tập trận", "dấu hiệu vụ việc",
+            # === Blacklist ảo giác — 2 TẦNG để KHÔNG xoá nhầm câu thật ===
+            # TẦNG CỨNG: cụm gần như KHÔNG BAO GIỜ là lời nói thật trong cuộc gọi/họp
+            # (rác phụ đề YouTube, tin tức) → xoá ngay khi khớp.
+            _hallucination_hard = [
+                "đăng ký kênh", "subtitles by", "đài truyền hình",
+                "những thông tin tiếp theo", "hàng trăm tình nguyện viên",
+                "cảnh sát đã không tìm thấy", "đoạn trích truyện",
+                "homestay và thư giãn", "cơ chế văn pháp", "dấu hiệu vụ việc",
+                "ông cũng bị cáo buộc", "tác phẩm nghệ thuật",
+            ]
+            # TẦNG MỀM: cụm CÓ THỂ là lời nói thật (câu chào/cảm ơn/tin tức) → CHỈ xoá khi
+            # độ tin cậy THẤP (ảo giác thường sinh trên nền im lặng/nhiễu). Trước đây khớp
+            # chuỗi con bất kỳ ở đây đã XOÁ NHẦM câu kết thật "...kết thúc ha. Cảm ơn các bạn."
+            # → mất phần cuối cuộc họp (đo trên 5.m4a: SRT dừng ở 10:20, audio dài 10:55).
+            _hallucination_soft = [
+                "cảm ơn các bạn", "xin chào các bạn", "hẹn gặp lại",
+                "chính quyền", "tàn phá", "tập trận", "tổng thống", "bản tin",
             ]
 
             for seg in segments_gen:
@@ -610,12 +763,27 @@ class STTEngine:
                     )
                     continue
 
-                # Filter 3: Blacklist ảo giác
+                # Filter 3: Blacklist ảo giác (2 tầng — xem định nghĩa ở trên)
                 text_lower = text.lower()
-                if any(bad in text_lower for bad in _hallucination_blacklist):
+                # Tầng cứng: xoá ngay
+                if any(bad in text_lower for bad in _hallucination_hard):
                     filtered_count += 1
-                    logger.warning(f"[Stream] Filter BLACKLIST: '{text[:80]}'")
+                    logger.warning(f"[Stream] Filter BLACKLIST-hard: '{text[:80]}'")
                     continue
+                # Tầng mềm: chỉ xoá khi model KHÔNG tự tin (ảo giác trên nền im lặng/nhiễu).
+                # Câu thật (vd "Cảm ơn các bạn" kết thúc họp) có độ tin cậy bình thường → GIỮ.
+                _soft = next((bad for bad in _hallucination_soft if bad in text_lower), None)
+                if _soft is not None:
+                    if no_speech_prob > 0.5 or avg_logprob < -0.7:
+                        filtered_count += 1
+                        logger.warning(
+                            f"[Stream] Filter BLACKLIST-soft (low conf "
+                            f"no_speech={no_speech_prob:.2f}, logprob={avg_logprob:.2f}): '{text[:80]}'"
+                        )
+                        continue
+                    logger.info(
+                        f"[Stream] GIỮ câu chứa cụm '{_soft}' (tin cậy bình thường): '{text[:60]}'"
+                    )
 
                 # Filter 4: Tốc độ từ/giây bất thường (Whisper bịa text dài hơn audio)
                 seg_duration = seg.end - seg.start
@@ -681,6 +849,14 @@ class STTEngine:
                             "end": round(w.end, 2),
                             "probability": round(w.probability, 2)
                         })
+
+                # Câu chào tổng đài: CHỈ cuộc gọi, CHỈ segment đầu tiên (chưa yield cái nào)
+                # và nằm ở đầu file → thay phần chào garble bằng câu chuẩn (cả word + text).
+                if is_phone_call and segment_count == 0 and seg.start < 8.0:
+                    fixed = normalize_call_greeting_words(words, round(seg.start, 2), round(seg.end, 2))
+                    if fixed is not None:
+                        words, text = fixed
+                        logger.info(f"[Stream] Chuẩn hoá câu chào tổng đài: '{text[:70]}'")
 
                 # Tính progress % dựa trên timestamp kết thúc của segment
                 progress = 0

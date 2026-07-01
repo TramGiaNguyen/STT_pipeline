@@ -493,6 +493,13 @@ async def transcribe_stream_endpoint(
                     language=_lang,
                     beam_size=8,
                     condition_on_previous_text=False,
+                    # KHÔNG mồi prompt cho CẢ điện thoại lẫn họp: prompt làm hỏng cửa sổ decode
+                    # ~30s đầu → nuốt mất câu mở đầu/câu chào. Chính tả thuật ngữ do
+                    # correct_domain_terms() lo (đo: bỏ prompt còn tăng recall). Xem ghi chú
+                    # ở PHONE_CALL_PROMPT trong src/stt_engine.py.
+                    initial_prompt=None,
+                    # Chỉ luồng CUỘC GỌI: chuẩn hoá câu chào tổng đài cố định ở segment đầu.
+                    is_phone_call=(diarize_mode != "meeting"),
                 ):
                     if event_dict.get("type") == "segment" and diarize == "true":
                         words = event_dict.get("words", [])
@@ -954,6 +961,7 @@ async def meeting_utterance_endpoint(
             parts_, segs_ = [], []
             for ev in engine.transcribe_stream(
                 temp_path, language=language, beam_size=8, condition_on_previous_text=False,
+                initial_prompt=None,  # lượt nói trong cuộc họp → KHÔNG mồi (giữ trọn câu mở đầu)
             ):
                 if ev.get("type") != "segment":
                     continue
